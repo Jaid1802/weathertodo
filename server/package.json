@@ -1,0 +1,19 @@
+{
+  "name": "weathertodo-backend",
+  "version": "1.0.0",
+  "description": "Backend service for WeatherTodo app (AI proxy, weather caching, task sync)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

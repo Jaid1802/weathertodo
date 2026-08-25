@@ -128,6 +128,14 @@ interface Ctx {
   reorderPlace: (id: string, dir: -1 | 1) => void;
   // integrations
   setIntegrations: (p: Partial<IntegrationState>) => void;
+  syncGoogleData: (data: {
+    calendars?: CalendarInfo[];
+    events?: CalEvent[];
+    lists?: TaskList[];
+    tasks?: Task[];
+    account?: string;
+  }) => void;
+  clearGoogleData: () => void;
   // chat
   pushChat: (m: ChatMessage) => void;
   updateChat: (id: string, p: Partial<ChatMessage>) => void;
@@ -328,6 +336,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'patch', payload: { places: arr } });
     },
     setIntegrations: (p) => dispatch({ type: 'patch', payload: { integrations: { ...state.integrations, ...p } } }),
+    syncGoogleData: ({ calendars, events, lists, tasks, account }) => {
+      const now = Date.now();
+      const nextPatch: Partial<PersistShape> = {};
+
+      if (calendars) {
+        const localCalendars = state.calendars.filter((c) => c.source !== 'google');
+        nextPatch.calendars = [...localCalendars, ...calendars];
+      }
+
+      if (events) {
+        const localEvents = state.events.filter((e) => e.source !== 'google');
+        nextPatch.events = [...localEvents, ...events];
+      }
+
+      if (lists) {
+        const localLists = state.lists.filter((l) => l.source !== 'google');
+        nextPatch.lists = [...localLists, ...lists];
+      }
+
+      if (tasks) {
+        const localTasks = state.tasks.filter((t) => t.source !== 'google');
+        nextPatch.tasks = [...localTasks, ...tasks];
+      }
+
+      nextPatch.integrations = {
+        ...state.integrations,
+        googleCalendar: calendars !== undefined ? true : state.integrations.googleCalendar,
+        googleTasks: lists !== undefined || tasks !== undefined ? true : state.integrations.googleTasks,
+        account: account ?? state.integrations.account,
+        lastSyncCalendar: events !== undefined || calendars !== undefined ? now : state.integrations.lastSyncCalendar,
+        lastSyncTasks: tasks !== undefined || lists !== undefined ? now : state.integrations.lastSyncTasks,
+      };
+
+      dispatch({ type: 'patch', payload: nextPatch });
+    },
+    clearGoogleData: () => {
+      dispatch({
+        type: 'patch',
+        payload: {
+          calendars: state.calendars.filter((c) => c.source !== 'google'),
+          events: state.events.filter((e) => e.source !== 'google'),
+          lists: state.lists.filter((l) => l.source !== 'google'),
+          tasks: state.tasks.filter((t) => t.source !== 'google'),
+          integrations: {
+            googleCalendar: false,
+            googleTasks: false,
+            account: undefined,
+            lastSyncCalendar: undefined,
+            lastSyncTasks: undefined,
+          },
+        },
+      });
+    },
     pushChat: (m) => dispatch({ type: 'patch', payload: { chat: [...state.chat, m] } }),
     updateChat: (id, p) => dispatch({ type: 'patch', payload: { chat: state.chat.map((c) => (c.id === id ? { ...c, ...p } : c)) } }),
     clearChat: () => dispatch({ type: 'patch', payload: { chat: [] } }),

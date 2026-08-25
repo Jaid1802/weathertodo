@@ -4,6 +4,7 @@ import {
   hoursForDay, nextHours, rainWindow, uvLabel, aqiFromWeather, aqiLabel,
 } from './weather';
 import { dateKey, minutesToLabel, formatTime, pluralize, uid } from './utils';
+import { askBackendAi } from './api';
 
 export type SuggestionTone = 'positive' | 'caution' | 'critical' | 'info' | 'focus';
 
@@ -565,30 +566,43 @@ export function buildSystemContext(ctx: PlanContext) {
 
 export async function askGemini(question: string, ctx: PlanContext): Promise<{ text: string; chips: string[]; live: boolean }> {
   const key = ctx.settings.geminiKey?.trim();
-  if (!key) {
-    const local = localAnswer(question, ctx);
-    return { ...local, live: false };
+  const sysContext = buildSystemContext(ctx);
+
+  // 1. Try Backend Proxy First (Render service)
+  const backendResult = await askBackendAi(question, sysContext, key || undefined);
+  if (backendResult && backendResult.live) {
+    return backendResult;
   }
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: buildSystemContext(ctx) }] },
-          contents: [{ role: 'user', parts: [{ text: question }] }],
-          generationConfig: { temperature: 0.6, maxOutputTokens: 512 },
-        }),
+
+  // 2. Direct client call if user provided Gemini API Key
+  if (key) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: sysContext }] },
+            contents: [{ role: 'user', parts: [{ text: question }] }],
+            generationConfig: { temperature: 0.6, maxOutputTokens: 512 },
+          }),
+        }
+      );
+      if (res.ok) {
+        const j: any = await res.json();
+        const text = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') ?? '';
+        if (text) {
+          return { text: text.trim(), chips: ['Plan my day', 'Free blocks', 'What should I wear?'], live: true };
+        }
       }
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const j: any = await res.json();
-    const text = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') ?? '';
-    if (!text) throw new Error('empty');
-    return { text: text.trim(), chips: ['Plan my day', 'Free blocks', 'What should I wear?'], live: true };
-  } catch {
-    const local = localAnswer(question, ctx);
-    return { ...local, live: false };
+    } catch {
+      // Fall through to local fallback
+    }
   }
+
+  // 3. Fallback to offline rule-based local answer
+  const local = localAnswer(question, ctx);
+  return { ...local, live: false };
 }
+
