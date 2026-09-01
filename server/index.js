@@ -58,7 +58,7 @@ app.post('/api/ai/ask', async (req, res) => {
   }
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`;
     
     const bodyPayload = {
       contents: [{ role: 'user', parts: [{ text: question }] }],
@@ -120,7 +120,7 @@ app.post('/api/ask-schedule', async (req, res) => {
   const systemPrompt = buildAskSchedulePrompt(context || {});
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
