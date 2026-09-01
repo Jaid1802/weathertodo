@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { CalEvent, Settings, Task } from './types';
 import {
   CurrentWeather, Place, WeatherBundle, bestOutdoorWindow, condition, fmtTemp, fmtWind,
@@ -5,6 +6,12 @@ import {
 } from './weather';
 import { dateKey, minutesToLabel, formatTime, pluralize, uid } from './utils';
 import { askBackendAi } from './api';
+
+function apiBaseUrl(): string {
+  const configured = process.env.EXPO_PUBLIC_API_BASE_URL;
+  if (configured) return configured.replace(/\/$/, '');
+  return Platform.OS === 'web' ? '' : ''; // same-origin on web; native must set the env var
+}
 
 export type SuggestionTone = 'positive' | 'caution' | 'critical' | 'info' | 'focus';
 
@@ -34,6 +41,12 @@ export interface PlanContext {
   settings: Settings;
   userName: string;
   now: Date;
+}
+
+export interface ScheduleAction {
+  kind: 'addTask' | 'addEvent';
+  task?: { title: string; priority: Task['priority']; context: Task['context']; dueMinutes?: number };
+  event?: { title: string; startMinutes: number; endMinutes: number; isOutdoor: boolean };
 }
 
 const TONE_ORDER: Record<SuggestionTone, number> = { critical: 0, caution: 1, focus: 2, positive: 3, info: 4 };
@@ -564,44 +577,72 @@ export function buildSystemContext(ctx: PlanContext) {
   ].join('\n');
 }
 
-export async function askGemini(question: string, ctx: PlanContext): Promise<{ text: string; chips: string[]; live: boolean }> {
-  const key = ctx.settings.geminiKey?.trim();
-  const sysContext = buildSystemContext(ctx);
+export async function askGemini(question: string, ctx: PlanContext): Promise<{ text: string; chips: string[]; live: boolean; action?: ScheduleAction }> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 9000);
 
-  // 1. Try Backend Proxy First (Render service)
-  const backendResult = await askBackendAi(question, sysContext, key || undefined);
-  if (backendResult && backendResult.live) {
-    return backendResult;
-  }
+    const contextPayload = {
+      placeName: ctx.place.name,
+      tempUnit: ctx.settings.tempUnit,
+      windUnit: ctx.settings.windUnit,
+      use24h: ctx.settings.use24h,
+      nowIso: ctx.now.toISOString(),
+      current: ctx.weather.current
+        ? {
+            tempC: ctx.weather.current.temp,
+            feelsLikeC: ctx.weather.current.feelsLike,
+            code: ctx.weather.current.code,
+            uv: ctx.weather.current.uv,
+            wind: ctx.weather.current.wind,
+          }
+        : undefined,
+      events: ctx.events.map((e) => ({
+        title: e.title,
+        startMinutes: e.startMinutes,
+        endMinutes: e.endMinutes,
+        isOutdoor: e.isOutdoor,
+        allDay: e.allDay,
+      })),
+      tasks: ctx.tasks.map((t) => ({
+        title: t.title,
+        priority: t.priority,
+        context: t.context,
+        dueMinutes: t.dueMinutes,
+        done: t.done,
+      })),
+    };
 
-  // 2. Direct client call if user provided Gemini API Key
-  if (key) {
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: sysContext }] },
-            contents: [{ role: 'user', parts: [{ text: question }] }],
-            generationConfig: { temperature: 0.6, maxOutputTokens: 512 },
-          }),
-        }
-      );
-      if (res.ok) {
-        const j: any = await res.json();
-        const text = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') ?? '';
-        if (text) {
-          return { text: text.trim(), chips: ['Plan my day', 'Free blocks', 'What should I wear?'], live: true };
-        }
+    const res = await fetch(`${apiBaseUrl()}/api/ask-schedule`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, context: contextPayload }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      const json: any = await res.json();
+      const chips =
+        Array.isArray(json.chips) && json.chips.length > 0
+          ? json.chips
+          : ['Plan my day', 'Free blocks', 'What should I wear?'];
+
+      let action: ScheduleAction | undefined;
+      if (json.type === 'addTask' && json.task) {
+        action = { kind: 'addTask', task: json.task };
+      } else if (json.type === 'addEvent' && json.event) {
+        action = { kind: 'addEvent', event: json.event };
       }
-    } catch {
-      // Fall through to local fallback
+
+      return { text: json.text || '', chips, live: true, action };
     }
+  } catch {
+    // Network error, timeout, or non-JSON — fall through to local
   }
 
-  // 3. Fallback to offline rule-based local answer
+  // Fallback to offline rule-based local answer
   const local = localAnswer(question, ctx);
   return { ...local, live: false };
 }

@@ -29,6 +29,7 @@ import IntegrationsScreen from './screens/IntegrationsScreen';
 import AboutScreen from './screens/AboutScreen';
 import OnboardingScreen from './screens/OnboardingScreen';
 import SignInScreen from './screens/SignInScreen';
+import SmartSuggestionScreen from './screens/SmartSuggestionScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -98,6 +99,7 @@ function Root() {
             <Stack.Screen name="Notifications" component={NotificationsScreen} />
             <Stack.Screen name="Integrations" component={IntegrationsScreen} />
             <Stack.Screen name="About" component={AboutScreen} />
+            <Stack.Screen name="SmartSuggestion" component={SmartSuggestionScreen} />
           </>
         )}
       </Stack.Navigator>
