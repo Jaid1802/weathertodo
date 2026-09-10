@@ -42,6 +42,7 @@ function Tabs() {
     >
       <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Home' }} />
       <Tab.Screen name="Calendar" component={CalendarScreen} options={{ title: 'Calendar' }} />
+      <Tab.Screen name="Clever" component={SmartSuggestionScreen} options={{ title: 'Clever' }} />
       <Tab.Screen name="Tasks" component={TasksScreen} options={{ title: 'Tasks' }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profile' }} />
     </Tab.Navigator>
@@ -100,6 +101,7 @@ function Root() {
             <Stack.Screen name="Integrations" component={IntegrationsScreen} />
             <Stack.Screen name="About" component={AboutScreen} />
             <Stack.Screen name="SmartSuggestion" component={SmartSuggestionScreen} />
+            <Stack.Screen name="AskClever" component={SmartSuggestionScreen} />
           </>
         )}
       </Stack.Navigator>

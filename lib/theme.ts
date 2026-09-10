@@ -203,7 +203,7 @@ export interface SkyTheme {
   mood: string;
 }
 
-const SKIES: Record<SkyKey, SkyTheme> = {
+export const SKIES: Record<SkyKey, SkyTheme> = {
   'clear-day': {
     key: 'clear-day',
     label: 'Clear',
@@ -414,6 +414,7 @@ export function getSky(key: SkyKey): SkyTheme {
   return SKIES[key] ?? SKIES['clear-day'];
 }
 
+export const SKY_THEMES = SKIES;
 export const ALL_SKIES: SkyTheme[] = Object.values(SKIES);
 
 /** Shadow presets that read well on both platforms */

@@ -7,9 +7,10 @@ export interface Task {
   title: string;
   notes?: string;
   done: boolean;
+  completed?: boolean;
   completedAt?: number;
   dueDate?: string; // YYYY-MM-DD
-  dueMinutes?: number; // minutes from midnight
+  dueMinutes?: number; // minutes from midnight (0-1440)
   priority: Priority;
   context: TaskContext;
   listId: string;
@@ -34,8 +35,8 @@ export interface CalEvent {
   title: string;
   notes?: string;
   date: string; // YYYY-MM-DD
-  startMinutes: number;
-  endMinutes: number;
+  startMinutes: number; // 0-1440
+  endMinutes: number;   // 0-1440
   allDay: boolean;
   location?: string;
   isOutdoor: boolean;
@@ -43,6 +44,7 @@ export interface CalEvent {
   calendarId: string;
   source: TaskSource;
   attendees?: string[];
+  status?: string;
 }
 
 export interface CalendarInfo {
@@ -60,13 +62,47 @@ export interface Reminder {
   id: string;
   title: string;
   trigger: ReminderTrigger;
-  date?: string;
+  date?: string; // YYYY-MM-DD
   minutes?: number;
   repeat: ReminderRepeat;
   placeName?: string;
   weatherRule?: 'rain' | 'clear' | 'cold' | 'hot' | 'uv';
   enabled: boolean;
   createdAt: number;
+}
+
+export interface WeatherData {
+  locationName?: string;
+  current?: {
+    temp: number;
+    feelsLike: number;
+    condition: string;
+    description?: string;
+    humidity: number;
+    windSpeed: number;
+    precipitation?: number;
+    rainChance?: number;
+    uvIndex?: number;
+    outdoorScore?: number;
+    sunrise?: string;
+    sunset?: string;
+    aqi?: number;
+    aqiLevel?: string;
+  };
+  hourly?: {
+    time: string;
+    temp: number;
+    condition: string;
+    rainChance: number;
+  }[];
+  daily?: {
+    day: string;
+    date: string;
+    tempMax: number;
+    tempMin: number;
+    condition: string;
+    rainProb: number;
+  }[];
 }
 
 export interface UserProfile {
@@ -79,13 +115,35 @@ export interface UserProfile {
   headline?: string;
 }
 
+export type CleverActionKind = 'addTask' | 'addEvent' | 'addReminder' | 'deleteTask' | 'deleteEvent' | 'confirmAction';
+
+export interface CleverAction {
+  type?: string;
+  kind?: CleverActionKind;
+  status?: 'proposed' | 'executed' | 'cancelled';
+  description?: string;
+  data?: any;
+  task?: { title: string; priority?: Priority; context?: TaskContext; dueDate?: string; dueMinutes?: number };
+  event?: { title: string; date?: string; startMinutes?: number; endMinutes?: number; isOutdoor?: boolean; location?: string };
+  reminder?: { title: string; date?: string; minutes?: number; trigger?: ReminderTrigger; repeat?: ReminderRepeat };
+  targetId?: string;
+  confirmed?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'model';
-  text: string;
-  ts: number;
+  role: 'user' | 'assistant' | 'model';
+  content?: string;
+  text?: string;
+  timestamp?: number;
+  ts?: number;
   chips?: string[];
   pending?: boolean;
+  live?: boolean;
+  action?: CleverAction;
+  actions?: CleverAction[];
+  actionDone?: boolean;
+  sourcesUsed?: string[];
 }
 
 export interface IntegrationState {
@@ -118,7 +176,12 @@ export interface Settings {
     taskReminders: boolean;
     eventAlerts: boolean;
   };
-  geminiKey: string;
-  geminiTone: 'concise' | 'balanced' | 'detailed';
-  autoSuggest: boolean;
+  geminiKey?: string;
+  geminiApiKey?: string;
+  geminiTone?: 'concise' | 'balanced' | 'detailed';
+  autoSuggest?: boolean;
+  timeFormat?: string;
+  outdoorPref?: string;
 }
+
+export type UserSettings = Settings;

@@ -1,21 +1,14 @@
-import { Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
-
 // Storage keys
-const ACCESS_TOKEN_KEY = '@agon/google_access_token';
-const REFRESH_TOKEN_KEY = 'agon_google_refresh_token';
-const EXPIRES_AT_KEY = '@agon/google_expires_at';
-const USER_INFO_KEY = '@agon/google_user_info';
+const ACCESS_TOKEN_KEY = '@weatherwhattodo/google_access_token';
+const REFRESH_TOKEN_KEY = '@weatherwhattodo/google_refresh_token';
+const EXPIRES_AT_KEY = '@weatherwhattodo/google_expires_at';
+const USER_INFO_KEY = '@weatherwhattodo/google_user_info';
 
-// Production / Dev backend base URL for auth proxy
-// On web production it uses window.location.origin, on native it uses configured backend URL
 export function getBackendBaseUrl(): string {
-  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.origin) {
-    // If running on custom domain or Vercel
+  if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin;
   }
-  return 'https://weatherwhattodo-backend.onrender.com';
+  return '';
 }
 
 // Google OAuth Discovery Endpoints
@@ -54,41 +47,27 @@ let inMemoryAccessToken: string | null = null;
 let inMemoryExpiresAt: number = 0;
 let inMemoryRefreshToken: string | null = null;
 
-// Secure storage helpers (SecureStore for native, AsyncStorage fallback for web)
-async function saveSecureItem(key: string, value: string): Promise<void> {
-  if (Platform.OS === 'web') {
-    await AsyncStorage.setItem(key, value);
-  } else {
-    try {
-      await SecureStore.setItemAsync(key, value, {
-        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
-      });
-    } catch {
-      await AsyncStorage.setItem(key, value);
-    }
-  }
-}
-
-async function getSecureItem(key: string): Promise<string | null> {
-  if (Platform.OS === 'web') {
-    return await AsyncStorage.getItem(key);
-  }
+function getLocal(key: string): string | null {
+  if (typeof window === 'undefined') return null;
   try {
-    const val = await SecureStore.getItemAsync(key);
-    if (val) return val;
-  } catch {}
-  return await AsyncStorage.getItem(key);
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
 }
 
-async function deleteSecureItem(key: string): Promise<void> {
-  if (Platform.OS === 'web') {
-    await AsyncStorage.removeItem(key);
-  } else {
-    try {
-      await SecureStore.deleteItemAsync(key);
-    } catch {}
-    await AsyncStorage.removeItem(key);
-  }
+function setLocal(key: string, value: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
+function removeLocal(key: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(key);
+  } catch {}
 }
 
 /** Store tokens and user profile after successful code exchange */
@@ -103,23 +82,23 @@ export async function saveGoogleTokens(data: {
   inMemoryAccessToken = data.access_token;
   inMemoryExpiresAt = expiresAt;
 
-  await AsyncStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
-  await AsyncStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
+  setLocal(ACCESS_TOKEN_KEY, data.access_token);
+  setLocal(EXPIRES_AT_KEY, String(expiresAt));
 
   if (data.refresh_token) {
     inMemoryRefreshToken = data.refresh_token;
-    await saveSecureItem(REFRESH_TOKEN_KEY, data.refresh_token);
+    setLocal(REFRESH_TOKEN_KEY, data.refresh_token);
   }
 
   if (data.user) {
-    await AsyncStorage.setItem(USER_INFO_KEY, JSON.stringify(data.user));
+    setLocal(USER_INFO_KEY, JSON.stringify(data.user));
   }
 }
 
 /** Get stored Google user profile */
 export async function getStoredGoogleUser(): Promise<GoogleUser | null> {
   try {
-    const raw = await AsyncStorage.getItem(USER_INFO_KEY);
+    const raw = getLocal(USER_INFO_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -129,9 +108,9 @@ export async function getStoredGoogleUser(): Promise<GoogleUser | null> {
 /** Check if user currently has stored tokens */
 export async function hasStoredGoogleAuth(): Promise<boolean> {
   if (inMemoryAccessToken && Date.now() < inMemoryExpiresAt) return true;
-  const refreshToken = await getSecureItem(REFRESH_TOKEN_KEY);
+  const refreshToken = getLocal(REFRESH_TOKEN_KEY);
   if (refreshToken) return true;
-  const token = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
+  const token = getLocal(ACCESS_TOKEN_KEY);
   return Boolean(token);
 }
 
@@ -151,7 +130,6 @@ export async function exchangeGoogleCode(
       code,
       code_verifier: codeVerifier,
       redirect_uri: redirectUri,
-      platform: Platform.OS,
     }),
   });
 
@@ -169,7 +147,7 @@ export async function exchangeGoogleCode(
  * Refreshes access token via backend proxy
  */
 export async function refreshGoogleAccessToken(): Promise<string | null> {
-  const refreshToken = inMemoryRefreshToken || (await getSecureItem(REFRESH_TOKEN_KEY));
+  const refreshToken = inMemoryRefreshToken || getLocal(REFRESH_TOKEN_KEY);
   if (!refreshToken) {
     return null;
   }
@@ -184,7 +162,6 @@ export async function refreshGoogleAccessToken(): Promise<string | null> {
 
     if (!res.ok) {
       if (res.status === 400 || res.status === 401) {
-        // Token was revoked or expired
         await clearStoredGoogleTokens();
       }
       return null;
@@ -196,8 +173,8 @@ export async function refreshGoogleAccessToken(): Promise<string | null> {
       inMemoryAccessToken = data.access_token;
       inMemoryExpiresAt = expiresAt;
 
-      await AsyncStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
-      await AsyncStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
+      setLocal(ACCESS_TOKEN_KEY, data.access_token);
+      setLocal(EXPIRES_AT_KEY, String(expiresAt));
       return data.access_token;
     }
   } catch (err) {
@@ -213,14 +190,12 @@ export async function refreshGoogleAccessToken(): Promise<string | null> {
 export async function getValidAccessToken(): Promise<string | null> {
   const now = Date.now();
 
-  // 1. Check in-memory token
   if (inMemoryAccessToken && now < inMemoryExpiresAt) {
     return inMemoryAccessToken;
   }
 
-  // 2. Check AsyncStorage token
-  const storedToken = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
-  const storedExpiresAt = Number((await AsyncStorage.getItem(EXPIRES_AT_KEY)) || '0');
+  const storedToken = getLocal(ACCESS_TOKEN_KEY);
+  const storedExpiresAt = Number(getLocal(EXPIRES_AT_KEY) || '0');
 
   if (storedToken && now < storedExpiresAt) {
     inMemoryAccessToken = storedToken;
@@ -228,7 +203,6 @@ export async function getValidAccessToken(): Promise<string | null> {
     return storedToken;
   }
 
-  // 3. Proactively refresh access token
   return await refreshGoogleAccessToken();
 }
 
@@ -240,18 +214,18 @@ export async function clearStoredGoogleTokens(): Promise<void> {
   inMemoryExpiresAt = 0;
   inMemoryRefreshToken = null;
 
-  await AsyncStorage.removeItem(ACCESS_TOKEN_KEY);
-  await AsyncStorage.removeItem(EXPIRES_AT_KEY);
-  await AsyncStorage.removeItem(USER_INFO_KEY);
-  await deleteSecureItem(REFRESH_TOKEN_KEY);
+  removeLocal(ACCESS_TOKEN_KEY);
+  removeLocal(EXPIRES_AT_KEY);
+  removeLocal(USER_INFO_KEY);
+  removeLocal(REFRESH_TOKEN_KEY);
 }
 
 /**
  * Disconnects Google account, revoking access token and clearing storage
  */
 export async function disconnectGoogleAccount(): Promise<void> {
-  const token = inMemoryAccessToken || (await AsyncStorage.getItem(ACCESS_TOKEN_KEY));
-  const refreshToken = inMemoryRefreshToken || (await getSecureItem(REFRESH_TOKEN_KEY));
+  const token = inMemoryAccessToken || getLocal(ACCESS_TOKEN_KEY);
+  const refreshToken = inMemoryRefreshToken || getLocal(REFRESH_TOKEN_KEY);
   const tokenToRevoke = refreshToken || token;
 
   if (tokenToRevoke) {

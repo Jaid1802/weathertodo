@@ -1,6 +1,6 @@
+'use client';
+
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { useColorScheme } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   CalEvent, CalendarInfo, ChatMessage, IntegrationState, Reminder, Settings, Task, TaskList, UserProfile,
 } from './types';
@@ -8,8 +8,10 @@ import { seedCalendars, seedEvents, seedLists, seedReminders, seedTasks } from '
 import { DEFAULT_PLACES, Place, WeatherBundle, fetchWeather, synthesize } from './weather';
 import { AppTheme, ColorScheme, getTheme } from './theme';
 import { dateKey, uid } from './utils';
+import { getValidAccessToken, getStoredGoogleUser, disconnectGoogleAccount } from './googleAuth';
+import { fetchAllGoogleData } from './googleApi';
 
-const KEY = '@aurelia/v1';
+const KEY = '@weatherwhattodo/v1';
 
 interface PersistShape {
   user: UserProfile | null;
@@ -63,10 +65,14 @@ function defaultState(): PersistShape {
     reminders: seedReminders(),
     places: [DEFAULT_PLACES[0], DEFAULT_PLACES[2], DEFAULT_PLACES[4]],
     activePlaceId: DEFAULT_PLACES[0].id,
-    integrations: { googleCalendar: true, googleTasks: true, lastSyncCalendar: Date.now() - 1000 * 60 * 12, lastSyncTasks: Date.now() - 1000 * 60 * 34, account: 'you@gmail.com' },
+    integrations: {
+      googleCalendar: false,
+      googleTasks: false,
+      account: undefined,
+    },
     chat: [],
-    onboarded: false,
-    stats: { streak: 4, lastActive: dateKey(new Date()), completedTotal: 128, plansMade: 26 },
+    onboarded: true,
+    stats: { streak: 0, lastActive: dateKey(new Date()), completedTotal: 0, plansMade: 0 },
   };
 }
 
@@ -91,12 +97,22 @@ function reducer(state: PersistShape, action: Action): PersistShape {
   }
 }
 
-interface Ctx {
+export interface Ctx {
   ready: boolean;
   state: PersistShape;
   theme: AppTheme;
   scheme: ColorScheme;
   fontScale: number;
+  // Direct state accessors
+  events: CalEvent[];
+  tasks: Task[];
+  reminders: Reminder[];
+  places: Place[];
+  settings: Settings;
+  chatMessages: ChatMessage[];
+  googleConnected: boolean;
+  googleUser: { email?: string; name?: string; picture?: string } | null;
+  loadingWeather: boolean;
   // auth
   signIn: (email: string, name?: string, provider?: UserProfile['provider']) => void;
   signOut: () => void;
@@ -104,40 +120,37 @@ interface Ctx {
   setOnboarded: (v: boolean) => void;
   // settings
   setSettings: (p: Partial<Settings>) => void;
+  updateSettings: (p: Partial<Settings>) => void;
   setNotifications: (p: Partial<Settings['notifications']>) => void;
   // tasks
-  addTask: (t: Omit<Task, 'id' | 'createdAt'> & Partial<Pick<Task, 'id' | 'createdAt'>>) => Task;
+  addTask: (t: Partial<Task> & { title: string }) => Task;
   updateTask: (id: string, p: Partial<Task>) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
   addList: (name: string, color: string, icon: string) => void;
   deleteList: (id: string) => void;
   // events
-  addEvent: (e: Omit<CalEvent, 'id'> & Partial<Pick<CalEvent, 'id'>>) => CalEvent;
+  addEvent: (e: Partial<CalEvent> & { title: string }) => CalEvent;
   updateEvent: (id: string, p: Partial<CalEvent>) => void;
   deleteEvent: (id: string) => void;
   toggleCalendar: (id: string) => void;
   // reminders
-  addReminder: (r: Omit<Reminder, 'id' | 'createdAt'>) => void;
+  addReminder: (r: Partial<Reminder> & { title: string }) => void;
   updateReminder: (id: string, p: Partial<Reminder>) => void;
   deleteReminder: (id: string) => void;
   // places
   addPlace: (p: Place) => void;
   removePlace: (id: string) => void;
-  setActivePlace: (id: string) => void;
+  setActivePlace: (idOrPlace: string | Place) => void;
   reorderPlace: (id: string, dir: -1 | 1) => void;
   // integrations
   setIntegrations: (p: Partial<IntegrationState>) => void;
-  syncGoogleData: (data: {
-    calendars?: CalendarInfo[];
-    events?: CalEvent[];
-    lists?: TaskList[];
-    tasks?: Task[];
-    account?: string;
-  }) => void;
+  syncGoogleData: () => Promise<void>;
+  disconnectGoogle: () => Promise<void>;
   clearGoogleData: () => void;
   // chat
   pushChat: (m: ChatMessage) => void;
+  addChatMessage: (m: ChatMessage) => void;
   updateChat: (id: string, p: Partial<ChatMessage>) => void;
   clearChat: () => void;
   bumpStat: (k: 'completedTotal' | 'plansMade', by?: number) => void;
@@ -157,7 +170,7 @@ const AppCtx = createContext<Ctx | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined as unknown as PersistShape, defaultState);
   const [ready, setReady] = useState(false);
-  const systemScheme = useColorScheme();
+  const [systemDark, setSystemDark] = useState(true);
   const [weather, setWeather] = useState<WeatherBundle | null>(null);
   const [weatherByPlace, setWeatherByPlace] = useState<Record<string, WeatherBundle>>({});
   const [weatherLoading, setWeatherLoading] = useState(true);
@@ -165,34 +178,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const hydrated = useRef(false);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw) as PersistShape;
-          dispatch({
-            type: 'hydrate',
-            payload: {
-              ...defaultState(),
-              ...parsed,
-              settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}), notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.settings?.notifications || {}) } },
-            },
-          });
-        }
-      } catch {
-        // ignore, use defaults
-      } finally {
-        hydrated.current = true;
-        setReady(true);
-      }
-    })();
+    if (typeof window !== 'undefined') {
+      const matcher = window.matchMedia('(prefers-color-scheme: dark)');
+      setSystemDark(matcher.matches);
+      const listener = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+      matcher.addEventListener('change', listener);
+      return () => matcher.removeEventListener('change', listener);
+    }
   }, []);
 
   useEffect(() => {
-    if (!hydrated.current) return;
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as PersistShape;
+        dispatch({
+          type: 'hydrate',
+          payload: {
+            ...defaultState(),
+            ...parsed,
+            settings: {
+              ...DEFAULT_SETTINGS,
+              ...(parsed.settings || {}),
+              notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.settings?.notifications || {}) },
+            },
+          },
+        });
+      }
+    } catch {}
+    hydrated.current = true;
+    setReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated.current || typeof window === 'undefined') return;
     const id = setTimeout(() => {
-      AsyncStorage.setItem(KEY, JSON.stringify(state)).catch(() => {});
-    }, 220);
+      try {
+        localStorage.setItem(KEY, JSON.stringify(state));
+      } catch {}
+    }, 200);
     return () => clearTimeout(id);
   }, [state]);
 
@@ -215,7 +240,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const b = await fetchWeather(place);
       setWeather(b);
       setWeatherByPlace((m) => ({ ...m, [place.id]: b }));
-      if (b.source === 'offline') setWeatherError('Showing modelled forecast \u2014 live data unavailable');
+      if (b.source === 'offline') setWeatherError('Showing modelled forecast — live data unavailable');
     } catch {
       const b = synthesize(place);
       setWeather(b);
@@ -235,11 +260,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     refreshWeather();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, state.activePlaceId]);
+  }, [ready, state.activePlaceId, refreshWeather]);
 
   const scheme: ColorScheme = state.settings.themeMode === 'system'
-    ? (systemScheme === 'dark' ? 'dark' : 'light')
+    ? (systemDark ? 'dark' : 'light')
     : state.settings.themeMode;
 
   const theme = useMemo(() => getTheme(scheme, state.settings.highContrast), [scheme, state.settings.highContrast]);
@@ -309,9 +333,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     updateEvent: (id, p) => dispatch({ type: 'patch', payload: { events: state.events.map((e) => (e.id === id ? { ...e, ...p } : e)) } }),
     deleteEvent: (id) => dispatch({ type: 'patch', payload: { events: state.events.filter((e) => e.id !== id) } }),
     toggleCalendar: (id) => dispatch({ type: 'patch', payload: { calendars: state.calendars.map((c) => (c.id === id ? { ...c, visible: !c.visible } : c)) } }),
-    addReminder: (r) => dispatch({ type: 'patch', payload: { reminders: [{ ...r, id: uid('r'), createdAt: Date.now() }, ...state.reminders] } }),
+    addReminder: (r) => dispatch({ type: 'patch', payload: { reminders: [{ id: uid('r'), createdAt: Date.now(), enabled: true, trigger: 'time' as const, repeat: 'none' as const, ...r }, ...state.reminders] } }),
     updateReminder: (id, p) => dispatch({ type: 'patch', payload: { reminders: state.reminders.map((r) => (r.id === id ? { ...r, ...p } : r)) } }),
     deleteReminder: (id) => dispatch({ type: 'patch', payload: { reminders: state.reminders.filter((r) => r.id !== id) } }),
+    events: state.events,
+    tasks: state.tasks,
+    reminders: state.reminders,
+    places: state.places,
+    settings: state.settings,
+    chatMessages: state.chat,
+    googleConnected: Boolean(state.integrations.googleCalendar || state.integrations.googleTasks),
+    googleUser: state.integrations.account ? { email: state.integrations.account } : null,
+    loadingWeather: weatherLoading,
+    updateSettings: (p) => dispatch({ type: 'settings', payload: p }),
+    addChatMessage: (m) => dispatch({ type: 'patch', payload: { chat: [...state.chat, m] } }),
     addPlace: (p) => {
       if (state.places.some((x) => x.id === p.id)) {
         dispatch({ type: 'patch', payload: { activePlaceId: p.id } });
@@ -326,7 +361,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         payload: { places: next, activePlaceId: state.activePlaceId === id ? next[0]?.id ?? DEFAULT_PLACES[0].id : state.activePlaceId },
       });
     },
-    setActivePlace: (id) => dispatch({ type: 'patch', payload: { activePlaceId: id } }),
+    setActivePlace: (idOrPlace) => {
+      const id = typeof idOrPlace === 'string' ? idOrPlace : idOrPlace.id;
+      dispatch({ type: 'patch', payload: { activePlaceId: id } });
+    },
     reorderPlace: (id, dir) => {
       const arr = [...state.places];
       const i = arr.findIndex((p) => p.id === id);
@@ -336,40 +374,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: 'patch', payload: { places: arr } });
     },
     setIntegrations: (p) => dispatch({ type: 'patch', payload: { integrations: { ...state.integrations, ...p } } }),
-    syncGoogleData: ({ calendars, events, lists, tasks, account }) => {
-      const now = Date.now();
-      const nextPatch: Partial<PersistShape> = {};
-
-      if (calendars) {
-        const localCalendars = state.calendars.filter((c) => c.source !== 'google');
-        nextPatch.calendars = [...localCalendars, ...calendars];
+    syncGoogleData: async () => {
+      try {
+        const data = await fetchAllGoogleData();
+        const user = await getStoredGoogleUser();
+        const now = Date.now();
+        dispatch({
+          type: 'patch',
+          payload: {
+            calendars: [...state.calendars.filter((c) => c.source !== 'google'), ...data.calendars],
+            events: [...state.events.filter((e) => e.source !== 'google'), ...data.events],
+            lists: [...state.lists.filter((l) => l.source !== 'google'), ...data.lists],
+            tasks: [...state.tasks.filter((t) => t.source !== 'google'), ...data.tasks],
+            integrations: {
+              ...state.integrations,
+              googleCalendar: true,
+              googleTasks: true,
+              account: user?.email || state.integrations.account,
+              lastSyncCalendar: now,
+              lastSyncTasks: now,
+            },
+          },
+        });
+      } catch (err) {
+        console.warn('Sync error:', err);
       }
-
-      if (events) {
-        const localEvents = state.events.filter((e) => e.source !== 'google');
-        nextPatch.events = [...localEvents, ...events];
-      }
-
-      if (lists) {
-        const localLists = state.lists.filter((l) => l.source !== 'google');
-        nextPatch.lists = [...localLists, ...lists];
-      }
-
-      if (tasks) {
-        const localTasks = state.tasks.filter((t) => t.source !== 'google');
-        nextPatch.tasks = [...localTasks, ...tasks];
-      }
-
-      nextPatch.integrations = {
-        ...state.integrations,
-        googleCalendar: calendars !== undefined ? true : state.integrations.googleCalendar,
-        googleTasks: lists !== undefined || tasks !== undefined ? true : state.integrations.googleTasks,
-        account: account ?? state.integrations.account,
-        lastSyncCalendar: events !== undefined || calendars !== undefined ? now : state.integrations.lastSyncCalendar,
-        lastSyncTasks: tasks !== undefined || lists !== undefined ? now : state.integrations.lastSyncTasks,
-      };
-
-      dispatch({ type: 'patch', payload: nextPatch });
+    },
+    disconnectGoogle: async () => {
+      await disconnectGoogleAccount();
+      dispatch({
+        type: 'patch',
+        payload: {
+          calendars: state.calendars.filter((c) => c.source !== 'google'),
+          events: state.events.filter((e) => e.source !== 'google'),
+          lists: state.lists.filter((l) => l.source !== 'google'),
+          tasks: state.tasks.filter((t) => t.source !== 'google'),
+          integrations: {
+            googleCalendar: false,
+            googleTasks: false,
+            account: undefined,
+            lastSyncCalendar: undefined,
+            lastSyncTasks: undefined,
+          },
+        },
+      });
     },
     clearGoogleData: () => {
       dispatch({
@@ -401,7 +449,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     weatherByPlace,
     loadPlaceWeather,
     resetAll: () => {
-      AsyncStorage.removeItem(KEY).catch(() => {});
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(KEY);
+      }
       dispatch({ type: 'hydrate', payload: defaultState() });
     },
   }), [ready, state, theme, scheme, fontScale, weather, weatherLoading, weatherError, refreshWeather, activePlace, weatherByPlace, loadPlaceWeather]);

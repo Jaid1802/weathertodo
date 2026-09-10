@@ -30,7 +30,7 @@ export default function AboutScreen({ navigation }: any) {
             <View style={{ width: 64, height: 64, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
               <Ionicons name="partly-sunny" size={32} color="#fff" />
             </View>
-            <Txt v="title2" w="700" c="#fff">Aurelia</Txt>
+            <Txt v="title2" w="700" c="#fff">Weather What To-Do</Txt>
             <Txt v="callout" c="rgba(255,255,255,0.82)" center style={{ marginTop: 6, lineHeight: 21 }}>
               Understand the weather. Understand your schedule. Plan a better day.
             </Txt>
@@ -53,7 +53,7 @@ export default function AboutScreen({ navigation }: any) {
 
         <View style={{ height: Space.lg }} />
 
-        <ListGroup title="Privacy" footer="Aurelia is built local-first. Weather comes from Open-Meteo without an account. Your tasks, events, reminders and conversations never leave this device unless you add your own Gemini key.">
+        <ListGroup title="Privacy" footer="Weather What To-Do is built local-first. Weather comes from Open-Meteo without an account. Your tasks, events, reminders and conversations never leave this device unless you add your own Gemini key.">
           <Row icon="phone-portrait-outline" title="Storage" value="On device" chevron={false} />
           <Row icon="cloud-offline-outline" title="Analytics" value="None" chevron={false} />
           <Row icon="lock-closed-outline" title="Account data" value="Local only" chevron={false} last />

@@ -180,7 +180,7 @@ export default function ProfileScreen({ navigation }: any) {
         </View>
 
         <Txt v="micro" c={theme.textTertiary} center style={{ marginTop: Space.md }}>
-          Aurelia · Weather + Productivity Assistant · v1.0
+          Weather What To-Do · Weather + Productivity Assistant · v1.0
         </Txt>
       </ScrollView>
 

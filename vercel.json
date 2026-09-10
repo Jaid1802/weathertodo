@@ -1,8 +1,0 @@
-{
-  "rewrites": [
-    {
-      "source": "/((?!_expo|assets|api|.*\\..*).*)",
-      "destination": "/index.html"
-    }
-  ]
-}

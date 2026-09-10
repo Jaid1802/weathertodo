@@ -103,16 +103,16 @@ export default function SettingsScreen({ navigation }: any) {
         <ListGroup title="Data">
           <Row icon="location-outline" title="Locations" value={`${state.places.length}`} onPress={() => navigation.navigate('Locations')} />
           <Row icon="alarm-outline" title="Reminders" value={`${state.reminders.length}`} onPress={() => navigation.navigate('Reminders')} />
-          <Row icon="information-circle-outline" title="About Aurelia" onPress={() => navigation.navigate('About')} />
+          <Row icon="information-circle-outline" title="About Weather What To-Do" onPress={() => navigation.navigate('About')} />
           <Row icon="refresh-outline" iconBg={theme.danger} title="Reset all data" danger chevron={false} onPress={() => setConfirmReset(true)} last />
         </ListGroup>
 
-        <Txt v="micro" c={theme.textTertiary} center style={{ marginTop: Space.sm }}>Aurelia v1.0 · Weather data by Open-Meteo</Txt>
+        <Txt v="micro" c={theme.textTertiary} center style={{ marginTop: Space.sm }}>Weather What To-Do v1.0 · Weather data by Open-Meteo</Txt>
       </ScrollView>
 
       <Sheet visible={keySheet} onClose={() => setKeySheet(false)} title="Gemini API key">
         <Txt v="callout" c={theme.textSecondary} style={{ lineHeight: 21, marginBottom: Space.md }}>
-          Paste a Google AI Studio key to let Smart Suggestion answer with the live Gemini model. Your key is stored only on this device and is sent directly to Google.
+          Paste a Google AI Studio key to let Ask Clever answer with the live Gemini model. Your key is stored only on this device and is sent directly to Google.
         </Txt>
         <TextInput
           value={keyDraft}

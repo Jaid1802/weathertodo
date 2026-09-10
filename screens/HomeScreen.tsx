@@ -278,13 +278,18 @@ export default function HomeScreen({ navigation }: any) {
         {/* ---------------- Gemini suggestions ---------------- */}
         <View style={{ marginTop: Space.xl }}>
           <View style={{ paddingHorizontal: Space.lg, flexDirection: 'row', alignItems: 'center', marginBottom: Space.sm }}>
-            <View style={{ width: 26, height: 26, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
-              <Ionicons name="sparkles" size={14} color={sky.accent} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Txt v="headline" w="700" c={onSky}>Smart Suggestion</Txt>
-              <Txt v="micro" c={onSkyMuted}>Weather × Calendar × Tasks, connected</Txt>
-            </View>
+            <Touch onPress={() => navigation.navigate('Clever')} style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} scale={0.98}>
+              <View style={{ width: 26, height: 26, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                <Ionicons name="sparkles" size={14} color={sky.accent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Txt v="headline" w="700" c={onSky}>Ask Clever</Txt>
+                <Txt v="micro" c={onSkyMuted}>Weather × Calendar × Tasks, connected</Txt>
+              </View>
+            </Touch>
+            <Touch onPress={() => navigation.navigate('Clever')} scale={0.94}>
+              <Txt v="sub" w="700" c={sky.accent}>Ask</Txt>
+            </Touch>
           </View>
 
           <ScrollView

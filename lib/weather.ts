@@ -128,6 +128,8 @@ export const DEFAULT_PLACES: Place[] = [
   { id: 'dxb', name: 'Dubai', country: 'UAE', countryCode: 'AE', lat: 25.2048, lon: 55.2708 },
 ];
 
+export const DEFAULT_PLACE: Place = DEFAULT_PLACES[0];
+
 /* ---------------------------- unit helpers ---------------------------- */
 
 export type TempUnit = 'C' | 'F';

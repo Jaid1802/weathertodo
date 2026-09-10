@@ -1,18 +1,18 @@
 {
   "expo": {
-    "name": "Agon Preview",
-    "slug": "agon-preview",
-    "scheme": "agon",
+    "name": "Weather What To-Do",
+    "slug": "weather-what-todo",
+    "scheme": "weatherwhattodo",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.arcadalabs.agonpreview"
+      "bundleIdentifier": "com.weatherwhattodo.app"
     },
     "android": {
-      "package": "com.arcadalabs.agonpreview",
+      "package": "com.weatherwhattodo.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",

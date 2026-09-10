@@ -64,7 +64,7 @@ export default function SignInScreen() {
               <View style={{ width: 66, height: 66, borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
                 <Ionicons name="partly-sunny" size={32} color={onSky} />
               </View>
-              <Txt v="title1" w="700" c={onSky}>Aurelia</Txt>
+              <Txt v="title1" w="700" c={onSky}>Weather What To-Do</Txt>
               <Txt v="callout" c={onSkyMuted} center style={{ marginTop: 6, maxWidth: 300, lineHeight: 21 }}>
                 Weather, calendar and tasks — read together, so your day makes sense.
               </Txt>
@@ -164,7 +164,7 @@ export default function SignInScreen() {
                 kind="glass"
                 tint="transparent"
                 onTint={onSkyMuted}
-                onPress={() => app.signIn('guest@aurelia.app', 'Guest', 'guest')}
+                onPress={() => app.signIn('guest@weatherwhattodo.app', 'Guest', 'guest')}
               />
             </GlassCard>
 

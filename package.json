@@ -1,5 +1,5 @@
 {
-  "name": "expo-router-ts",
+  "name": "weather-what-todo",
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
@@ -32,7 +32,8 @@
     "react-native-safe-area-context": "^5.9.1",
     "react-native-screens": "^4.27.0",
     "react-native-svg": "^15.15.5",
-    "react-native-web": "^0.21.2"
+    "react-native-web": "^0.21.2",
+    "react-native-worklets": "^0.10.4"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
@@ -43,12 +44,14 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "build": "expo export --platform web",
+    "build:web": "expo export --platform web",
     "server:start": "node server/index.js",
     "server:dev": "node --watch server/index.js",
     "build:apk": "eas build -p android --profile preview",
     "build:aab": "eas build -p android --profile production",
     "build:ios": "eas build -p ios --profile preview",
-    "prebuild": "expo prebuild"
+    "expo:prebuild": "expo prebuild"
   },
   "private": true
 }

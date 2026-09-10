@@ -1,16 +1,16 @@
-import { Platform } from 'react-native';
-import { CalEvent, Settings, Task } from './types';
+import { CalEvent, ChatMessage, CleverAction, IntegrationState, Reminder, Settings, Task } from './types';
 import {
   CurrentWeather, Place, WeatherBundle, bestOutdoorWindow, condition, fmtTemp, fmtWind,
   hoursForDay, nextHours, rainWindow, uvLabel, aqiFromWeather, aqiLabel,
 } from './weather';
 import { dateKey, minutesToLabel, formatTime, pluralize, uid } from './utils';
-import { askBackendAi } from './api';
+import { askBackendAi, DEFAULT_BACKEND_URL } from './api';
 
 function apiBaseUrl(): string {
-  const configured = process.env.EXPO_PUBLIC_API_BASE_URL;
-  if (configured) return configured.replace(/\/$/, '');
-  return Platform.OS === 'web' ? '' : ''; // same-origin on web; native must set the env var
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return '';
 }
 
 export type SuggestionTone = 'positive' | 'caution' | 'critical' | 'info' | 'focus';
@@ -36,18 +36,18 @@ export interface PlanContext {
   place: Place;
   weather: WeatherBundle;
   events: CalEvent[]; // today's, sorted
+  allEvents?: CalEvent[];
   tasks: Task[]; // today's + overdue, undone first
   allTasks: Task[];
+  reminders?: Reminder[];
+  integrations?: IntegrationState;
   settings: Settings;
   userName: string;
   now: Date;
 }
 
-export interface ScheduleAction {
-  kind: 'addTask' | 'addEvent';
-  task?: { title: string; priority: Task['priority']; context: Task['context']; dueMinutes?: number };
-  event?: { title: string; startMinutes: number; endMinutes: number; isOutdoor: boolean };
-}
+export type { CleverAction };
+export type ScheduleAction = CleverAction;
 
 const TONE_ORDER: Record<SuggestionTone, number> = { critical: 0, caution: 1, focus: 2, positive: 3, info: 4 };
 
@@ -342,47 +342,39 @@ export function generateBriefing(ctx: PlanContext): string {
   const lines: string[] = [];
 
   lines.push(
-    `${c.label} in ${place.name}, ${fmtTemp(cur.temp, settings.tempUnit)} and feels like ${fmtTemp(cur.feelsLike, settings.tempUnit)}${today ? `, heading to ${fmtTemp(today.max, settings.tempUnit)}` : ''}.`
+    `Good day, ${userName.split(' ')[0]}! 🌤️ It's ${fmtTemp(cur.temp, settings.tempUnit)} and ${c.label.toLowerCase()} in ${place.name}${today ? `, heading to a high of ${fmtTemp(today.max, settings.tempUnit)}` : ''}.`
   );
 
   if (sorted.length) {
     const first = sorted[0];
     const last = sorted[sorted.length - 1];
     lines.push(
-      `You have ${sorted.length} ${pluralize(sorted.length, 'event')} \u2014 starting with ${first.title} at ${minutesToLabel(first.startMinutes, settings.use24h)} and wrapping after ${last.title} at ${minutesToLabel(last.endMinutes, settings.use24h)}.`
+      `You have ${sorted.length} ${pluralize(sorted.length, 'event')} scheduled: ${sorted.slice(0, 3).map((e) => `"${e.title}" at ${minutesToLabel(e.startMinutes, settings.use24h)}`).join(', ')}.`
     );
   } else {
-    lines.push('No calendar events today, which means the shape of the day is yours to set.');
+    lines.push('Your calendar is completely open today!');
   }
 
   if (open.length) {
     const urgent = open.filter((t) => t.priority === 'urgent' || t.priority === 'high');
     lines.push(
-      `${open.length} open ${pluralize(open.length, 'task')}${urgent.length ? `, ${urgent.length} of them high priority \u2014 \u201C${urgent[0].title}\u201D is the one that matters most` : ''}.`
+      `You have ${open.length} pending ${pluralize(open.length, 'task')}${urgent.length ? ` (${urgent.length} high priority \u2014 starting with "${urgent[0].title}")` : ''}.`
     );
   } else {
-    lines.push('Your task list for today is already clear.');
+    lines.push('Your task list is clear.');
   }
 
   if (rain) {
-    lines.push(`Rain is likely from ${formatTime(rain.start, settings.use24h)} (peak ${rain.peak}%) \u2014 plan errands before that.`);
+    lines.push(`Rain is expected starting around ${formatTime(rain.start, settings.use24h)} (peak ${rain.peak}%).`);
   } else if (window) {
     lines.push(`Your cleanest outdoor window is ${formatTime(window.start, settings.use24h)}\u2013${formatTime(window.end, settings.use24h)}.`);
   }
 
   if (gaps.length) {
     const g = gaps.sort((a, b) => b.end - b.start - (a.end - a.start))[0];
-    lines.push(`Biggest free block: ${minutesToLabel(g.start, settings.use24h)}\u2013${minutesToLabel(g.end, settings.use24h)}. That's where the hard thinking should go.`);
+    lines.push(`Biggest free block: ${minutesToLabel(g.start, settings.use24h)}\u2013${minutesToLabel(g.end, settings.use24h)}.`);
   }
 
-  const tone = settings.geminiTone;
-  if (tone === 'concise') return lines.slice(0, 3).join(' ');
-  if (tone === 'detailed') {
-    lines.push(
-      `Comfort index is ${comfortScore(cur)}/100 with ${cur.humidity}% humidity and wind at ${fmtWind(cur.wind, settings.windUnit)}. ${today ? `Sunrise was ${formatTime(today.sunrise, settings.use24h)} and sunset lands at ${formatTime(today.sunset, settings.use24h)}.` : ''}`
-    );
-    lines.push(`One suggestion, ${userName.split(' ')[0]}: decide now what "done" looks like today. Everything else is negotiable.`);
-  }
   return lines.join(' ');
 }
 
@@ -391,160 +383,278 @@ export function generateBriefing(ctx: PlanContext): string {
 /* ------------------------------------------------------------------ */
 
 export const STARTER_PROMPTS = [
-  'Plan my day',
-  'When should I go outside?',
-  'Will it rain today?',
-  'What should I wear?',
-  'Where are my free blocks?',
-  'What should I do first?',
-  'Is tomorrow better for the run?',
-  'Summarise my week',
+  "What's my day looking like?",
+  'Can I go outside today?',
+  'What should I get done first?',
+  "When's the best time for a walk?",
+  'Will the rain affect my plans?',
+  'What should I prioritize today?',
 ];
 
-export function localAnswer(question: string, ctx: PlanContext): { text: string; chips: string[] } {
-  const q = question.toLowerCase();
-  const { weather, events, tasks, settings, place, now } = ctx;
+export function localAnswer(question: string, ctx: PlanContext, history: ChatMessage[] = []): { text: string; chips: string[]; action?: CleverAction } {
+  const q = question.toLowerCase().trim();
+  const { weather, events, allEvents = [], tasks, allTasks, reminders = [], settings, place, userName, now, integrations } = ctx;
   const cur = weather.current;
   const sorted = sortEvents(events.filter((e) => !e.allDay));
   const open = tasks.filter((t) => !t.done);
   const rain = rainWindow(weather);
-  const window = bestOutdoorWindow(weather, dateKey(now));
+  const todayKey = dateKey(now);
+  const window = bestOutdoorWindow(weather, todayKey);
   const gaps = freeGaps(sorted);
-  const chipsDefault = ['Plan my day', 'What should I wear?', 'Free blocks'];
+  const chipsDefault = ["What's my day looking like?", 'Can I go outside today?', 'What should I prioritize today?'];
 
   const has = (...k: string[]) => k.some((x) => q.includes(x));
 
-  if (has('plan my day', 'plan the day', 'brief', 'summary of today', 'how does my day')) {
-    const g = gaps.sort((a, b) => b.end - b.start - (a.end - a.start))[0];
-    const outdoorTasks = open.filter((t) => t.context === 'outdoor');
-    const parts = [
-      `Here's how I'd shape today in ${place.name}:`,
-      ``,
-      `\u2022 Weather: ${condition(cur.code).label}, ${fmtTemp(cur.temp, settings.tempUnit)}, comfort ${comfortScore(cur)}/100.`,
-      sorted.length
-        ? `\u2022 Anchors: ${sorted.slice(0, 3).map((e) => `${e.title} at ${minutesToLabel(e.startMinutes, settings.use24h)}`).join(', ')}${sorted.length > 3 ? ` +${sorted.length - 3} more` : ''}.`
-        : `\u2022 Anchors: none scheduled \u2014 you own the whole day.`,
-      g ? `\u2022 Deep work: ${minutesToLabel(g.start, settings.use24h)}\u2013${minutesToLabel(g.end, settings.use24h)} is your longest clear block. Put ${open.find((t) => t.priority === 'urgent' || t.priority === 'high')?.title ?? 'your hardest task'} there.` : '',
-      window && outdoorTasks.length
-        ? `\u2022 Outside: ${formatTime(window.start, settings.use24h)}\u2013${formatTime(window.end, settings.use24h)} scores ${window.score}/100 \u2014 batch ${outdoorTasks.map((t) => `\u201C${t.title}\u201D`).slice(0, 2).join(' and ')} then.`
-        : window ? `\u2022 Outside: ${formatTime(window.start, settings.use24h)}\u2013${formatTime(window.end, settings.use24h)} is the nicest stretch. Take a walk.` : '',
-      rain ? `\u2022 Watch out: rain from ${formatTime(rain.start, settings.use24h)}, peaking at ${rain.peak}%.` : '',
-      ``,
-      `If you only finish one thing, make it ${open[0]?.title ?? 'a genuine break'}.`,
-    ].filter(Boolean);
-    return { text: parts.join('\n'), chips: ['Move something outdoors', 'What should I wear?', 'Free blocks'] };
+  // 1. Natural Language Task Creation: e.g. "Add 'Buy milk' to my tasks" or "Add a task to buy groceries"
+  const addTaskMatch = question.match(/(?:add\s+(?:a\s+)?task(?:\s+to)?\s+["“']?([^"”']+)["”']?|add\s+["“']([^"”']+)["”']\s+to\s+(?:my\s+)?tasks?)/i);
+  if (addTaskMatch) {
+    const taskTitle = (addTaskMatch[1] || addTaskMatch[2] || '').trim();
+    if (taskTitle) {
+      const isOutdoor = /outdoor|walk|run|bike|grocer|shop|car|mow|yard/i.test(taskTitle);
+      return {
+        text: `Got it! I've set up a task for "${taskTitle}". Ready to add it?`,
+        chips: ["What's my day looking like?", 'What should I get done first?'],
+        action: {
+          kind: 'addTask',
+          task: {
+            title: taskTitle,
+            priority: 'normal',
+            context: isOutdoor ? 'outdoor' : 'anywhere',
+            dueDate: todayKey,
+          },
+        },
+      };
+    }
   }
 
-  if (has('rain', 'umbrella', 'wet')) {
+  // 2. Natural Language Reminder Creation: e.g. "Remind me tomorrow at 8 AM to buy groceries" or "Remind me at 6 PM to go running"
+  const reminderMatch = question.match(/remind\s+me(?:\s+(?:tomorrow|today))?(?:\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?\s+to\s+(.+)/i);
+  if (reminderMatch) {
+    const timeStr = reminderMatch[1];
+    const reminderTitle = reminderMatch[2]?.replace(/[.!?]+$/, '').trim();
+    let mins = 9 * 60;
+    if (timeStr) {
+      const isPm = /pm/i.test(timeStr);
+      const isAm = /am/i.test(timeStr);
+      const cleanNum = timeStr.replace(/[^\d:]/g, '');
+      const parts = cleanNum.split(':');
+      let hr = parseInt(parts[0], 10) || 9;
+      const m = parseInt(parts[1], 10) || 0;
+      if (isPm && hr < 12) hr += 12;
+      if (isAm && hr === 12) hr = 0;
+      mins = hr * 60 + m;
+    }
+    const isTomorrow = /tomorrow/i.test(question);
+    const targetDate = isTomorrow ? dateKey(new Date(now.getTime() + 86400000)) : todayKey;
+
+    return {
+      text: `Sure thing! I can remind you ${isTomorrow ? 'tomorrow' : 'today'} ${timeStr ? `at ${timeStr}` : ''} to "${reminderTitle}". Want me to set it?`,
+      chips: ["What's my day looking like?", 'Will the rain affect my plans?'],
+      action: {
+        kind: 'addReminder',
+        reminder: {
+          title: reminderTitle,
+          date: targetDate,
+          minutes: mins,
+          trigger: 'time',
+          repeat: 'none',
+        },
+      },
+    };
+  }
+
+  // 3. Destructive Action Confirmation: e.g. "Delete my meeting tomorrow" or "Delete task"
+  if (has('delete', 'remove', 'cancel') && has('meeting', 'event', 'calendar', 'task', 'reminder')) {
+    const isEvent = has('meeting', 'event', 'calendar');
+    const isTask = has('task');
+    return {
+      text: `I can delete that ${isEvent ? 'calendar event' : isTask ? 'task' : 'item'}. Want me to go ahead?`,
+      chips: ['Yes, delete it', 'No, keep it', "What's my day looking like?"],
+      action: {
+        kind: 'confirmAction',
+        description: `Delete ${isEvent ? 'event' : isTask ? 'task' : 'item'}`,
+      },
+    };
+  }
+
+  // 4. Missing Google Integration Awareness
+  if (has('google calendar', 'google tasks', 'connect google', 'sync calendar') && (!integrations?.googleCalendar || !integrations?.googleTasks)) {
+    return {
+      text: `I don't have access to your Google Calendar or Tasks yet. Connect your Google account in Settings/Integrations and I'll pull in your full schedule seamlessly!`,
+      chips: ["What's my day looking like?", 'Can I go outside today?'],
+    };
+  }
+
+  // 5. Daily Briefing / "What's my day looking like?"
+  if (has('day looking like', 'plan my day', 'daily briefing', 'briefing', 'summary of today', 'how does my day', 'what does my day')) {
+    const outdoorTasks = open.filter((t) => t.context === 'outdoor');
+    const g = gaps.sort((a, b) => b.end - b.start - (a.end - a.start))[0];
+
+    const greeting = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
+    const lines = [
+      `${greeting}! 🌤️ Here's the snapshot for today in ${place.name}:`,
+      ``,
+      `• Weather: ${condition(cur.code).label}, ${fmtTemp(cur.temp, settings.tempUnit)} (feels like ${fmtTemp(cur.feelsLike, settings.tempUnit)}). Comfort score is ${comfortScore(cur)}/100.`,
+      sorted.length
+        ? `• Calendar: You have ${sorted.length} ${pluralize(sorted.length, 'event')} \u2014 starting with "${sorted[0].title}" at ${minutesToLabel(sorted[0].startMinutes, settings.use24h)}.`
+        : `• Calendar: Clear schedule \u2014 no meetings booked!`,
+      open.length
+        ? `• Tasks: ${open.length} open ${pluralize(open.length, 'task')}, prioritized by urgency.`
+        : `• Tasks: All clear for today.`,
+      rain
+        ? `• Heads up: Rain expected starting around ${formatTime(rain.start, settings.use24h)} (peak ${rain.peak}%).`
+        : window
+        ? `• Outdoor Window: Best time outside is ${formatTime(window.start, settings.use24h)}\u2013${formatTime(window.end, settings.use24h)}.`
+        : '',
+      g ? `• Deep Work: Free window from ${minutesToLabel(g.start, settings.use24h)}\u2013${minutesToLabel(g.end, settings.use24h)}.` : '',
+      ``,
+      open.length ? `Sunshine first, productivity second! 😄` : `Enjoy the free time!`,
+    ].filter(Boolean);
+
+    return {
+      text: lines.join('\n'),
+      chips: ['Can I go outside today?', 'What should I prioritize today?', 'Will the rain affect my plans?'],
+    };
+  }
+
+  // 6. "Can I go outside today?" / Lunch outside / Evening run
+  if (has('go outside', 'can i go out', 'lunch outside', 'eat outside', 'sit outside', 'outdoor today')) {
     if (rain) {
       return {
-        text: `Yes \u2014 rain is likely from ${formatTime(rain.start, settings.use24h)} through roughly ${formatTime(rain.end, settings.use24h)}, peaking at ${rain.peak}% probability.\n\nAnything outdoors before ${formatTime(rain.start, settings.use24h)} is safe. ${sorted.filter((e) => e.isOutdoor).length ? `Your outdoor commitments today: ${sorted.filter((e) => e.isOutdoor).map((e) => e.title).join(', ')}.` : ''} Take a shell rather than an umbrella if wind is above ${fmtWind(25, settings.windUnit)}.`,
-        chips: ['Move my outdoor event', 'Best outdoor window', 'Add umbrella reminder'],
+        text: `You can, but timing is key! 🌦️ There's rain expected around ${formatTime(rain.start, settings.use24h)} (peak ${rain.peak}%). If you're planning lunch or stepping out, aim for before ${formatTime(rain.start, settings.use24h)} to stay dry.`,
+        chips: ["When's the best time for a walk?", 'Will the rain affect my plans?', 'What should I wear?'],
       };
     }
-    const maxPop = Math.max(...nextHours(weather, 18).map((h) => h.pop), 0);
-    return {
-      text: `No meaningful rain expected. Highest precipitation probability in the next 18 hours is ${maxPop}%, which is background noise. Leave the umbrella at home.`,
-      chips: ['Best outdoor window', 'Plan my day'],
-    };
+    const score = comfortScore(cur);
+    if (score >= 65) {
+      return {
+        text: `Yep \u2014 today looks great for it! ☀️ Comfort score is ${score}/100 with ${fmtTemp(cur.temp, settings.tempUnit)} and gentle breezes. Perfect time to step out.`,
+        chips: ["When's the best time for a walk?", "What's my day looking like?"],
+      };
+    } else {
+      return {
+        text: `You can, but pack a layer. It's ${fmtTemp(cur.temp, settings.tempUnit)} and feels like ${fmtTemp(cur.feelsLike, settings.tempUnit)} with ${cur.wind} km/h wind.`,
+        chips: ['What should I wear?', "When's the best time for a walk?"],
+      };
+    }
   }
 
-  if (has('wear', 'dress', 'jacket', 'coat')) {
-    const t = cur.temp;
-    let layer = 'a light layer';
-    if (t <= 2) layer = 'a heavy coat, gloves and something over your ears';
-    else if (t <= 9) layer = 'a proper jacket over a mid layer';
-    else if (t <= 16) layer = 'a light jacket you can take off indoors';
-    else if (t <= 24) layer = 'one layer \u2014 long sleeves are enough';
-    else layer = 'breathable, light clothing';
-    const extras = [
-      rain ? 'water-resistant shoes and a shell' : '',
-      cur.uv >= 6 ? 'sunglasses and SPF 30+' : '',
-      cur.wind >= 28 ? 'something wind-proof' : '',
-    ].filter(Boolean);
-    return {
-      text: `It's ${fmtTemp(cur.temp, settings.tempUnit)} and feels like ${fmtTemp(cur.feelsLike, settings.tempUnit)} \u2014 go with ${layer}.${extras.length ? `\n\nAlso bring ${extras.join(', ')}.` : ''}\n\n${sorted.some((e) => e.isOutdoor) ? `You're outdoors for ${sorted.filter((e) => e.isOutdoor).map((e) => e.title).join(' and ')}, so plan for the full stretch, not just the commute.` : 'Most of your day is indoors, so prioritise comfort over coverage.'}`,
-      chips: ['Will it rain today?', 'Plan my day'],
-    };
-  }
-
-  if (has('outside', 'outdoor', 'walk', 'run', 'exercise', 'fresh air')) {
+  // 7. "When should I go for a walk?" / "When should I walk the dog?" / "When to exercise"
+  if (has('walk', 'run', 'cycling', 'bike', 'dog', 'jog', 'exercise')) {
+    if (has('tomorrow')) {
+      const tmr = weather.daily[1];
+      if (tmr) {
+        return {
+          text: `For tomorrow, I'd go between 7–9 AM or in the early evening. 🚴 It'll be around ${fmtTemp(tmr.min, settings.tempUnit)}–${fmtTemp(tmr.max, settings.tempUnit)} with ${tmr.pop}% rain chance and lighter wind.`,
+          chips: ['Do I have anything scheduled tomorrow?', "What's my day looking like?"],
+        };
+      }
+    }
     if (window) {
-      const outdoorTasks = open.filter((t) => t.context === 'outdoor');
       return {
-        text: `Best window is ${formatTime(window.start, settings.use24h)}\u2013${formatTime(window.end, settings.use24h)} with a conditions score of ${window.score}/100.\n\n${gaps.some((g) => g.start <= new Date(window.start).getHours() * 60 && g.end >= new Date(window.end).getHours() * 60) ? 'Your calendar is clear then, so nothing to move.' : 'You have something scheduled around then \u2014 the next best option is a short break between blocks.'}${outdoorTasks.length ? `\n\nStack these while you're out: ${outdoorTasks.map((t) => t.title).join(', ')}.` : ''}`,
-        chips: ['Add an outdoor task', 'Will it rain today?', 'Plan my day'],
+        text: `I'd aim for around ${formatTime(window.start, settings.use24h)}\u2013${formatTime(window.end, settings.use24h)}. 🐕 Conditions score ${window.score}/100, the temperature drops nicely, and rain chance is minimal. Your calendar looks clear then too!`,
+        chips: ['Add a walk task', 'Will the rain affect my plans?', "What's my day looking like?"],
       };
     }
-    return { text: 'Conditions are poor for outdoor time across the next 12 hours. I would keep today indoors and revisit tomorrow morning.', chips: chipsDefault };
-  }
-
-  if (has('free', 'gap', 'available', 'block', 'time for')) {
-    if (!gaps.length) return { text: 'You have no free block longer than 30 minutes between 8am and 9pm. That is a signal, not a schedule \u2014 consider dropping one commitment.', chips: ['Review my day', 'Plan my day'] };
     return {
-      text: `Free blocks today:\n\n${gaps.map((g) => `\u2022 ${minutesToLabel(g.start, settings.use24h)}\u2013${minutesToLabel(g.end, settings.use24h)} (${Math.round((g.end - g.start) / 60 * 10) / 10}h)`).join('\n')}\n\nThat's ${Math.round(gaps.reduce((a, g) => a + g.end - g.start, 0) / 60 * 10) / 10} hours of usable space against ${open.length} open ${pluralize(open.length, 'task')}.`,
-      chips: ['What should I do first?', 'Plan my day'],
+      text: `Late afternoon or around 6:30 PM looks best today. Temperature will be cooler and wind is calmer.`,
+      chips: ["What's my day looking like?", 'Can I go outside today?'],
     };
   }
 
-  if (has('first', 'priority', 'most important', 'focus on', 'start with')) {
-    const ranked = [...open].sort((a, b) => {
-      const p: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-      return p[a.priority] - p[b.priority] || (a.dueMinutes ?? 1440) - (b.dueMinutes ?? 1440);
-    });
-    if (!ranked.length) return { text: 'Nothing open. Genuinely \u2014 your list is clear. Rest counts as a valid next action.', chips: ['Add a task', 'Plan my day'] };
-    const top = ranked[0];
+  // 8. "Will the rain affect my plans?" / Rain check
+  if (has('rain', 'affect my plans', 'wet', 'umbrella', 'storm')) {
+    const outdoorEvents = sorted.filter((e) => e.isOutdoor);
+    if (rain) {
+      if (outdoorEvents.length) {
+        return {
+          text: `Heads up! 🌧️ Rain is expected from ${formatTime(rain.start, settings.use24h)} to ${formatTime(rain.end, settings.use24h)} (peak ${rain.peak}%). That overlaps with "${outdoorEvents[0].title}" at ${minutesToLabel(outdoorEvents[0].startMinutes, settings.use24h)}. If you can shift it before ${formatTime(rain.start, settings.use24h)}, you'll have much better conditions.`,
+          chips: ['Move my outdoor event', 'Best outdoor window', "What's my day looking like?"],
+        };
+      }
+      return {
+        text: `Rain is rolling in around ${formatTime(rain.start, settings.use24h)} and peaking around ${rain.peak}%. None of your scheduled calendar events are marked outdoors, but if you have errands, do them before ${formatTime(rain.start, settings.use24h)}.`,
+        chips: ['What should I wear?', "What's my day looking like?"],
+      };
+    }
     return {
-      text: `Start with \u201C${top.title}\u201D.\n\nWhy: it's ${top.priority} priority${top.dueMinutes !== undefined ? `, due at ${minutesToLabel(top.dueMinutes, settings.use24h)}` : ''}${top.estimateMin ? `, and only needs about ${top.estimateMin} minutes` : ''}. ${top.context === 'outdoor' ? `It's outdoors, and conditions are ${comfortScore(cur)}/100 right now \u2014 go before that changes.` : `It's indoor work, so weather isn't a constraint.`}\n\nAfter that: ${ranked.slice(1, 3).map((t) => t.title).join(', ') || 'you are clear'}.`,
-      chips: ['Free blocks', 'Plan my day'],
+      text: `Looking clear! 🌤️ No significant rain is expected today (highest chance is negligible). Your plans are safe from the weather.`,
+      chips: ["What's my day looking like?", 'Can I go outside today?'],
     };
   }
 
+  // 9. "What should I get done first?" / "What should I prioritize today?"
+  if (has('first', 'prioritize', 'priority', 'what should i do', 'tasks', 'get done')) {
+    const overdue = open.filter((t) => t.dueDate && t.dueDate < todayKey);
+    const urgent = open.filter((t) => t.priority === 'urgent' || t.priority === 'high');
+    const outdoor = open.filter((t) => t.context === 'outdoor');
+
+    if (!open.length) {
+      return {
+        text: `Your task list is completely clear today! 🎉 Rest or take a walk \u2014 you've earned it.`,
+        chips: ['Can I go outside today?', "When's the best time for a walk?"],
+      };
+    }
+
+    const first = overdue[0] || urgent[0] || open[0];
+    const parts = [
+      `Here's what I'd tackle first:`,
+      ``,
+      `1. "${first.title}" \u2014 ${first.dueDate && first.dueDate < todayKey ? 'Overdue, knock this out to clear the backlog!' : 'Highest leverage item.'}`,
+    ];
+
+    if (open[1]) {
+      parts.push(`2. "${open[1].title}" \u2014 ${open[1].context === 'outdoor' && rain ? 'Do this before the afternoon rain.' : 'Quick win next.'}`);
+    }
+    if (open[2]) {
+      parts.push(`3. "${open[2].title}"`);
+    }
+
+    parts.push(``);
+    parts.push(`Knock out "${first.title}" first and future-you will be very pleased. 😄`);
+
+    return {
+      text: parts.join('\n'),
+      chips: ['Where are my free blocks?', 'Plan my day', 'Can I go outside today?'],
+    };
+  }
+
+  // 10. Tomorrow's Schedule / Forecast
   if (has('tomorrow')) {
-    const tmr = weather.daily[1];
-    if (tmr) {
-      const c2 = condition(tmr.code);
-      const better = c2.outdoorScore > condition(cur.code).outdoorScore;
+    const tmrKey = dateKey(new Date(now.getTime() + 86400000));
+    const tmrEvents = (allEvents.length ? allEvents : events).filter((e) => e.date === tmrKey);
+    const tmrWeather = weather.daily[1];
+
+    if (tmrEvents.length) {
       return {
-        text: `Tomorrow: ${c2.label}, ${fmtTemp(tmr.min, settings.tempUnit)} to ${fmtTemp(tmr.max, settings.tempUnit)}, ${tmr.pop}% chance of precipitation, UV up to ${Math.round(tmr.uvMax)}.\n\n${better ? 'That is better than today for anything outdoors \u2014 worth shifting the run.' : 'Today is actually the better outdoor day, so do not defer.'}`,
-        chips: ['Plan my day', 'Best outdoor window'],
+        text: `Tomorrow's looking pretty structured: You have ${tmrEvents.length} ${pluralize(tmrEvents.length, 'event')}, starting with "${tmrEvents[0].title}" at ${minutesToLabel(tmrEvents[0].startMinutes, settings.use24h)}. Weather-wise, it's ${tmrWeather ? `${condition(tmrWeather.code).label.toLowerCase()}, ${fmtTemp(tmrWeather.min, settings.tempUnit)}–${fmtTemp(tmrWeather.max, settings.tempUnit)}` : 'pleasant'}.`,
+        chips: ['Can I go cycling tomorrow?', "What's my day looking like?"],
       };
+    }
+    return {
+      text: `Tomorrow's calendar is wide open! 🌤️ Weather looks like ${tmrWeather ? `${condition(tmrWeather.code).label.toLowerCase()} with a high of ${fmtTemp(tmrWeather.max, settings.tempUnit)}` : 'great conditions'}.`,
+      chips: ['Can I go cycling tomorrow?', "What's my day looking like?"],
+    };
+  }
+
+  // 11. Conversational Follow-up Support
+  if (history.length > 0) {
+    const foundUser = [...history].reverse().find((m) => m.role === 'user');
+    const lastUserMsg = (foundUser?.text || foundUser?.content || '').toLowerCase();
+    if (has('what about tomorrow', 'how about tomorrow', 'and tomorrow')) {
+      if (lastUserMsg.includes('run') || lastUserMsg.includes('walk') || lastUserMsg.includes('outside')) {
+        const tmr = weather.daily[1];
+        return {
+          text: `Tomorrow is actually great for it! 🌤️ High of ${tmr ? fmtTemp(tmr.max, settings.tempUnit) : '24°C'} with low rain chance. Early morning or around 6 PM will be the sweet spot.`,
+          chips: ['Do I have anything scheduled tomorrow?', "What's my day looking like?"],
+        };
+      }
     }
   }
 
-  if (has('week', 'next 7', 'coming days')) {
-    return {
-      text: `Week ahead in ${place.name}:\n\n${weather.daily.slice(0, 7).map((d) => `\u2022 ${new Date(d.time).toLocaleDateString(undefined, { weekday: 'short' })} \u2014 ${condition(d.code).short}, ${fmtTemp(d.min, settings.tempUnit)}/${fmtTemp(d.max, settings.tempUnit)}, ${d.pop}% rain`).join('\n')}\n\nBest outdoor day looks like ${bestDayLabel(weather)}.`,
-      chips: ['Plan my day', 'Is tomorrow better for the run?'],
-    };
-  }
-
-  if (has('event', 'meeting', 'calendar', 'schedule')) {
-    if (!sorted.length) return { text: 'Nothing on the calendar today. Your first commitment is whatever you decide it is.', chips: ['Plan my day', 'Add a task'] };
-    return {
-      text: `Today's schedule:\n\n${sorted.map((e) => `\u2022 ${minutesToLabel(e.startMinutes, settings.use24h)}\u2013${minutesToLabel(e.endMinutes, settings.use24h)} \u2014 ${e.title}${e.isOutdoor ? ' (outdoor)' : ''}`).join('\n')}\n\nTotal booked: ${Math.round(dayLoad(sorted) / 60 * 10) / 10}h. Free: ${Math.round(gaps.reduce((a, g) => a + g.end - g.start, 0) / 60 * 10) / 10}h.`,
-      chips: ['Free blocks', 'Plan my day'],
-    };
-  }
-
-  if (has('task', 'todo', 'to-do', 'list')) {
-    if (!open.length) return { text: 'No open tasks today. That is a clean slate, not an oversight.', chips: ['Add a task', 'Plan my day'] };
-    return {
-      text: `${open.length} open ${pluralize(open.length, 'task')}:\n\n${open.slice(0, 6).map((t) => `\u2022 ${t.title} \u2014 ${t.priority}${t.context === 'outdoor' ? ', outdoor' : ''}`).join('\n')}\n\n${open.filter((t) => t.context === 'outdoor').length ? `The outdoor ones pair well with ${window ? `${formatTime(window.start, settings.use24h)}` : 'the early afternoon'}.` : 'All indoor \u2014 weather is not a blocker today.'}`,
-      chips: ['What should I do first?', 'Plan my day'],
-    };
-  }
-
-  if (has('hello', 'hi ', 'hey', 'good morning')) {
-    return {
-      text: `Hello. In ${place.name} it's ${fmtTemp(cur.temp, settings.tempUnit)} and ${condition(cur.code).label.toLowerCase()}. You have ${sorted.length} ${pluralize(sorted.length, 'event')} and ${open.length} open ${pluralize(open.length, 'task')} today. Want me to shape a plan?`,
-      chips: STARTER_PROMPTS.slice(0, 3),
-    };
-  }
-
-  // Generic synthesis fallback
+  // Default synthesis
   return {
-    text: `${generateBriefing(ctx)}\n\nAsk me to plan the day, find free blocks, or check whether the weather will interfere with something specific.`,
+    text: `${generateBriefing(ctx)}\n\nAsk me anything about your schedule, weather, or what to tackle next!`,
     chips: chipsDefault,
   };
 }
@@ -560,33 +670,39 @@ function bestDayLabel(weather: WeatherBundle) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Optional live Gemini call                                           */
+/* Gemini call & Backend Proxy                                        */
 /* ------------------------------------------------------------------ */
 
 export function buildSystemContext(ctx: PlanContext) {
   const { weather, events, tasks, place, settings, now } = ctx;
   const cur = weather.current;
   return [
-    `You are Smart Suggestion, a calm, precise daily-planning assistant. Combine weather, calendar and tasks into short actionable guidance. Never invent data.`,
+    `You are Ask Clever, a friendly, smart, weather-aware daily planning assistant. Combine weather, calendar and tasks into short actionable guidance.`,
     `Location: ${place.name}${place.region ? `, ${place.region}` : ''}. Local time: ${formatTime(now, settings.use24h)}.`,
     `Now: ${condition(cur.code).label}, ${Math.round(cur.temp)}C (feels ${Math.round(cur.feelsLike)}C), humidity ${cur.humidity}%, wind ${Math.round(cur.wind)}km/h, UV ${cur.uv}.`,
     `Next 12h: ${nextHours(weather, 12).map((h) => `${new Date(h.time).getHours()}h ${Math.round(h.temp)}C ${h.pop}%`).join('; ')}`,
     `Today's events: ${events.length ? events.map((e) => `${e.title} ${minutesToLabel(e.startMinutes)}-${minutesToLabel(e.endMinutes)}${e.isOutdoor ? ' (outdoor)' : ''}`).join('; ') : 'none'}`,
     `Open tasks: ${tasks.filter((t) => !t.done).map((t) => `${t.title} [${t.priority}${t.context === 'outdoor' ? ', outdoor' : ''}]`).join('; ') || 'none'}`,
-    `Tone: ${settings.geminiTone}. Use short paragraphs and bullet points. Max 160 words.`,
+    `Tone: friendly, smart, concise, conversational.`,
   ].join('\n');
 }
 
-export async function askGemini(question: string, ctx: PlanContext): Promise<{ text: string; chips: string[]; live: boolean; action?: ScheduleAction }> {
+export async function askGemini(
+  question: string,
+  ctx: PlanContext,
+  history: ChatMessage[] = []
+): Promise<{ text: string; chips: string[]; live: boolean; action?: CleverAction }> {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
+    const timeout = setTimeout(() => controller.abort(), 12000);
 
     const contextPayload = {
       placeName: ctx.place.name,
+      region: ctx.place.region,
       tempUnit: ctx.settings.tempUnit,
       windUnit: ctx.settings.windUnit,
       use24h: ctx.settings.use24h,
+      userName: ctx.userName,
       nowIso: ctx.now.toISOString(),
       current: ctx.weather.current
         ? {
@@ -595,28 +711,74 @@ export async function askGemini(question: string, ctx: PlanContext): Promise<{ t
             code: ctx.weather.current.code,
             uv: ctx.weather.current.uv,
             wind: ctx.weather.current.wind,
+            humidity: ctx.weather.current.humidity,
+            isDay: ctx.weather.current.isDay,
           }
         : undefined,
+      forecast: {
+        today: ctx.weather.daily[0]
+          ? {
+              min: ctx.weather.daily[0].min,
+              max: ctx.weather.daily[0].max,
+              pop: ctx.weather.daily[0].pop,
+              rain: ctx.weather.daily[0].precipSum,
+              uvMax: ctx.weather.daily[0].uvMax,
+              sunrise: ctx.weather.daily[0].sunrise,
+              sunset: ctx.weather.daily[0].sunset,
+            }
+          : undefined,
+        tomorrow: ctx.weather.daily[1]
+          ? {
+              date: ctx.weather.daily[1].date,
+              min: ctx.weather.daily[1].min,
+              max: ctx.weather.daily[1].max,
+              pop: ctx.weather.daily[1].pop,
+              code: ctx.weather.daily[1].code,
+            }
+          : undefined,
+        rainWindow: rainWindow(ctx.weather),
+        outdoorWindow: bestOutdoorWindow(ctx.weather, dateKey(ctx.now)),
+      },
       events: ctx.events.map((e) => ({
         title: e.title,
+        date: e.date,
         startMinutes: e.startMinutes,
         endMinutes: e.endMinutes,
         isOutdoor: e.isOutdoor,
         allDay: e.allDay,
+        location: e.location,
+        source: e.source,
       })),
       tasks: ctx.tasks.map((t) => ({
         title: t.title,
         priority: t.priority,
         context: t.context,
+        dueDate: t.dueDate,
         dueMinutes: t.dueMinutes,
         done: t.done,
+        source: t.source,
       })),
+      reminders: (ctx.reminders || []).slice(0, 5).map((r) => ({
+        title: r.title,
+        trigger: r.trigger,
+        date: r.date,
+        minutes: r.minutes,
+        weatherRule: r.weatherRule,
+      })),
+      integrations: {
+        googleCalendar: Boolean(ctx.integrations?.googleCalendar),
+        googleTasks: Boolean(ctx.integrations?.googleTasks),
+      },
     };
 
-    const res = await fetch(`${apiBaseUrl()}/api/ask-schedule`, {
+    const recentHistory = history
+      .slice(-6)
+      .map((m) => ({ role: m.role, text: m.text }));
+
+    const res = await fetch(`${apiBaseUrl()}/api/ask-clever`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, context: contextPayload }),
+      body: JSON.stringify({ question, context: contextPayload, history: recentHistory }),
       signal: controller.signal,
     });
 
@@ -627,23 +789,29 @@ export async function askGemini(question: string, ctx: PlanContext): Promise<{ t
       const chips =
         Array.isArray(json.chips) && json.chips.length > 0
           ? json.chips
-          : ['Plan my day', 'Free blocks', 'What should I wear?'];
+          : STARTER_PROMPTS.slice(0, 3);
 
-      let action: ScheduleAction | undefined;
+      let action: CleverAction | undefined;
       if (json.type === 'addTask' && json.task) {
         action = { kind: 'addTask', task: json.task };
       } else if (json.type === 'addEvent' && json.event) {
         action = { kind: 'addEvent', event: json.event };
+      } else if (json.type === 'addReminder' && json.reminder) {
+        action = { kind: 'addReminder', reminder: json.reminder };
+      } else if (json.type === 'confirmAction' || json.confirm) {
+        action = { kind: 'confirmAction', description: json.confirm?.description || 'Confirm action' };
       }
 
-      return { text: json.text || '', chips, live: true, action };
+      if (json.text && !json.error) {
+        return { text: json.text, chips, live: true, action };
+      }
     }
   } catch {
     // Network error, timeout, or non-JSON — fall through to local
   }
 
   // Fallback to offline rule-based local answer
-  const local = localAnswer(question, ctx);
+  const local = localAnswer(question, ctx, history);
   return { ...local, live: false };
 }
 
