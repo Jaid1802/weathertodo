@@ -5,7 +5,7 @@ import {
   CalEvent, CalendarInfo, ChatMessage, IntegrationState, Reminder, Settings, Task, TaskList, UserProfile,
 } from './types';
 import { seedCalendars, seedEvents, seedLists, seedReminders, seedTasks } from './seed';
-import { DEFAULT_PLACES, Place, WeatherBundle, fetchWeather, synthesize } from './weather';
+import { DEFAULT_PLACES, Place, WeatherBundle, fetchWeather, synthesize, reverseGeocode } from './weather';
 import { AppTheme, ColorScheme, getTheme } from './theme';
 import { dateKey, uid } from './utils';
 import { getValidAccessToken, getStoredGoogleUser, disconnectGoogleAccount } from './googleAuth';
@@ -63,8 +63,8 @@ function defaultState(): PersistShape {
     events: seedEvents(),
     calendars: seedCalendars(),
     reminders: seedReminders(),
-    places: [DEFAULT_PLACES[0], DEFAULT_PLACES[2], DEFAULT_PLACES[4]],
-    activePlaceId: DEFAULT_PLACES[0].id,
+    places: [],
+    activePlaceId: 'current',
     integrations: {
       googleCalendar: false,
       googleTasks: false,
@@ -145,7 +145,13 @@ export interface Ctx {
   reorderPlace: (id: string, dir: -1 | 1) => void;
   // integrations
   setIntegrations: (p: Partial<IntegrationState>) => void;
-  syncGoogleData: () => Promise<void>;
+  syncGoogleData: (payload?: {
+    calendars?: CalendarInfo[];
+    events?: CalEvent[];
+    lists?: TaskList[];
+    tasks?: Task[];
+    account?: string;
+  }) => Promise<void>;
   disconnectGoogle: () => Promise<void>;
   clearGoogleData: () => void;
   // chat
@@ -257,6 +263,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setWeatherByPlace((m) => ({ ...m, [p.id]: b }));
   }, [weatherByPlace]);
 
+  // Auto-detect real device/browser location on startup
+  useEffect(() => {
+    if (!ready || typeof window === 'undefined') return;
+    const hasCurrent = state.places.some((p) => p.id === 'current');
+    if (navigator?.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          try {
+            const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+            const currentPlace: Place = { ...place, id: 'current' };
+            dispatch({
+              type: 'patch',
+              payload: {
+                places: [
+                  currentPlace,
+                  ...state.places.filter((p) => p.id !== 'current' && p.id !== 'sf' && p.name !== currentPlace.name),
+                ],
+                activePlaceId: (!state.activePlaceId || state.activePlaceId === 'current' || state.activePlaceId === 'sf' || !hasCurrent)
+                  ? 'current'
+                  : state.activePlaceId,
+              },
+            });
+          } catch {}
+        },
+        () => {
+          // Permission denied or unavailable — keep existing state without forcing SF
+        },
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
+      );
+    }
+  }, [ready]);
+
   useEffect(() => {
     if (!ready) return;
     refreshWeather();
@@ -348,6 +386,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     updateSettings: (p) => dispatch({ type: 'settings', payload: p }),
     addChatMessage: (m) => dispatch({ type: 'patch', payload: { chat: [...state.chat, m] } }),
     addPlace: (p) => {
+      if (p.id === 'current') {
+        const others = state.places.filter((x) => x.id !== 'current');
+        dispatch({ type: 'patch', payload: { places: [p, ...others], activePlaceId: 'current' } });
+        return;
+      }
       if (state.places.some((x) => x.id === p.id)) {
         dispatch({ type: 'patch', payload: { activePlaceId: p.id } });
         return;
@@ -373,26 +416,43 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       [arr[i], arr[j]] = [arr[j], arr[i]];
       dispatch({ type: 'patch', payload: { places: arr } });
     },
-    setIntegrations: (p) => dispatch({ type: 'patch', payload: { integrations: { ...state.integrations, ...p } } }),
-    syncGoogleData: async () => {
+    setIntegrations: (p: Partial<IntegrationState>) =>
+      dispatch({ type: 'patch', payload: { integrations: { ...state.integrations, ...p } } }),
+    syncGoogleData: async (payload) => {
       try {
-        const data = await fetchAllGoogleData();
         const user = await getStoredGoogleUser();
         const now = Date.now();
+        const data = payload
+          ? {
+              calendars: payload.calendars ?? [],
+              events: payload.events ?? [],
+              lists: payload.lists ?? [],
+              tasks: payload.tasks ?? [],
+            }
+          : await fetchAllGoogleData();
+
         dispatch({
           type: 'patch',
           payload: {
-            calendars: [...state.calendars.filter((c) => c.source !== 'google'), ...data.calendars],
-            events: [...state.events.filter((e) => e.source !== 'google'), ...data.events],
-            lists: [...state.lists.filter((l) => l.source !== 'google'), ...data.lists],
-            tasks: [...state.tasks.filter((t) => t.source !== 'google'), ...data.tasks],
+            ...(payload?.calendars !== undefined || !payload
+              ? { calendars: [...state.calendars.filter((c) => c.source !== 'google'), ...data.calendars] }
+              : {}),
+            ...(payload?.events !== undefined || !payload
+              ? { events: [...state.events.filter((e) => e.source !== 'google'), ...data.events] }
+              : {}),
+            ...(payload?.lists !== undefined || !payload
+              ? { lists: [...state.lists.filter((l) => l.source !== 'google'), ...data.lists] }
+              : {}),
+            ...(payload?.tasks !== undefined || !payload
+              ? { tasks: [...state.tasks.filter((t) => t.source !== 'google'), ...data.tasks] }
+              : {}),
             integrations: {
               ...state.integrations,
               googleCalendar: true,
               googleTasks: true,
-              account: user?.email || state.integrations.account,
-              lastSyncCalendar: now,
-              lastSyncTasks: now,
+              account: payload?.account || user?.email || state.integrations.account,
+              lastSyncCalendar: payload?.calendars || payload?.events || !payload ? now : state.integrations.lastSyncCalendar,
+              lastSyncTasks: payload?.lists || payload?.tasks || !payload ? now : state.integrations.lastSyncTasks,
             },
           },
         });

@@ -5,6 +5,9 @@ const EXPIRES_AT_KEY = '@weatherwhattodo/google_expires_at';
 const USER_INFO_KEY = '@weatherwhattodo/google_user_info';
 
 export function getBackendBaseUrl(): string {
+  if (process.env.EXPO_PUBLIC_BACKEND_URL) {
+    return process.env.EXPO_PUBLIC_BACKEND_URL;
+  }
   if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin;
   }
@@ -122,8 +125,9 @@ export async function exchangeGoogleCode(
   codeVerifier?: string,
   redirectUri?: string
 ): Promise<{ access_token: string; expires_in: number; refresh_token?: string; user?: GoogleUser }> {
+  console.log('Google token exchange redirect_uri:', redirectUri);
   const baseUrl = getBackendBaseUrl();
-  const res = await fetch(`${baseUrl}/api/auth/google/callback`, {
+  let res = await fetch(`${baseUrl}/api/auth/google/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -131,11 +135,34 @@ export async function exchangeGoogleCode(
       code_verifier: codeVerifier,
       redirect_uri: redirectUri,
     }),
-  });
+  }).catch(() => null);
 
-  if (!res.ok) {
-    const errJson = await res.json().catch(() => ({}));
-    throw new Error(errJson.error || `Failed to exchange auth code: HTTP ${res.status}`);
+  // Fallback to standalone backend endpoints if same-origin is not serving /api (e.g. dev Metro)
+  if (!res || !res.ok) {
+    const fallbacks = ['http://localhost:4000', 'https://weatherwhattodo-backend.onrender.com'];
+    for (const fb of fallbacks) {
+      if (baseUrl === fb) continue;
+      try {
+        const fbRes = await fetch(`${fb}/api/auth/google/callback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code,
+            code_verifier: codeVerifier,
+            redirect_uri: redirectUri,
+          }),
+        });
+        if (fbRes.ok) {
+          res = fbRes;
+          break;
+        }
+      } catch {}
+    }
+  }
+
+  if (!res || !res.ok) {
+    const errJson = res ? await res.json().catch(() => ({})) : {};
+    throw new Error(errJson.error || `Failed to exchange auth code${res ? `: HTTP ${res.status}` : ''}`);
   }
 
   const data = await res.json();
@@ -154,14 +181,32 @@ export async function refreshGoogleAccessToken(): Promise<string | null> {
 
   try {
     const baseUrl = getBackendBaseUrl();
-    const res = await fetch(`${baseUrl}/api/auth/google/refresh`, {
+    let res = await fetch(`${baseUrl}/api/auth/google/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
-    });
+    }).catch(() => null);
 
-    if (!res.ok) {
-      if (res.status === 400 || res.status === 401) {
+    if (!res || !res.ok) {
+      const fallbacks = ['http://localhost:4000', 'https://weatherwhattodo-backend.onrender.com'];
+      for (const fb of fallbacks) {
+        if (baseUrl === fb) continue;
+        try {
+          const fbRes = await fetch(`${fb}/api/auth/google/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+          });
+          if (fbRes.ok) {
+            res = fbRes;
+            break;
+          }
+        } catch {}
+      }
+    }
+
+    if (!res || !res.ok) {
+      if (res && (res.status === 400 || res.status === 401)) {
         await clearStoredGoogleTokens();
       }
       return null;

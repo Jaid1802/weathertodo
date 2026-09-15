@@ -20,12 +20,19 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Missing refresh_token parameter' });
   }
 
-  const clientId = process.env.GOOGLE_WEB_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_WEB_CLIENT_SECRET;
+  const clientId =
+    process.env.GOOGLE_WEB_CLIENT_ID ||
+    process.env.GOOGLE_CLIENT_ID ||
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
+    '767576613120-nfakoenf0n4d1sihfok0r3pd00tor2r8.apps.googleusercontent.com';
+  const clientSecret =
+    process.env.GOOGLE_WEB_CLIENT_SECRET ||
+    process.env.GOOGLE_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     return res.status(500).json({
-      error: 'Google OAuth credentials not configured on server (GOOGLE_WEB_CLIENT_ID / GOOGLE_WEB_CLIENT_SECRET missing)',
+      error: 'Google OAuth credentials not configured on server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing)',
     });
   }
 

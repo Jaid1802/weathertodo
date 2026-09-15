@@ -1,48 +1,50 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Keyboard, Platform, ScrollView, StyleSheet, TextInput, View, useWindowDimensions,
+  ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import WeatherBackground from '../components/WeatherBackground';
-import { Badge, Btn, Chip, GlassCard, IconBtn, Skeleton, Touch, Txt } from '../components/ui';
+import { Touch } from '../components/ui';
 import { useApp } from '../lib/store';
-import { Radius, Space, getSky } from '../lib/theme';
-import { condition, skyFor } from '../lib/weather';
-import {
-  PlanContext, Suggestion, CleverAction,
-  askGemini, generateSuggestions, STARTER_PROMPTS,
-} from '../lib/gemini';
+import { PlanContext, Suggestion, CleverAction, askGemini, generateSuggestions } from '../lib/gemini';
 import { ChatMessage } from '../lib/types';
-import { dateKey, formatTime, uid } from '../lib/utils';
+import { dateKey, uid } from '../lib/utils';
+
+const ACCENT_COLORS: Record<string, string> = {
+  critical: '#EF4444',
+  caution: '#F59E0B',
+  focus: '#6366F1',
+  positive: '#10B981',
+  info: '#3B82F6',
+};
+
+const QUICK_PROMPTS = [
+  'What should I wear?',
+  'What should I do first?',
+  'When should I go outside?',
+  'Do I need an umbrella?',
+  'How should I plan my day?',
+];
 
 export default function SmartSuggestionScreen({ navigation }: any) {
   const app = useApp();
-  const { state, weather, activePlace, theme, scheme } = app;
+  const { state, weather, activePlace, scheme } = app;
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const settings = state.settings;
+  const isDark = scheme === 'dark';
 
   const todayKey = dateKey(new Date());
-
-  const skyKey = useMemo(() => {
-    if (!settings.dynamicWeatherTheme) return scheme === 'dark' ? 'clear-night' : 'clear-day';
-    if (settings.weatherOverride) return settings.weatherOverride as any;
-    if (!weather) return 'cloudy';
-    const today = weather.daily.find((d) => d.date === todayKey);
-    const hoursFromSunrise = today ? (Date.now() - today.sunrise) / 3600_000 : undefined;
-    const minsToSunset = today ? (today.sunset - Date.now()) / 60000 : 999;
-    if (weather.current.isDay && minsToSunset > 0 && minsToSunset < 55 && weather.current.code <= 3) return 'sunset';
-    return skyFor(weather.current.code, weather.current.isDay, hoursFromSunrise);
-  }, [weather, settings.dynamicWeatherTheme, settings.weatherOverride, todayKey, scheme]);
-
-  const sky = getSky(skyKey as any);
-  const glass = {
-    tint: settings.highContrast ? 'rgba(0,0,0,0.42)' : sky.glass,
-    border: settings.highContrast ? 'rgba(255,255,255,0.55)' : sky.glassBorder,
-  };
-  const onSky = sky.onSky;
-  const onSkyMuted = settings.highContrast ? 'rgba(255,255,255,0.92)' : sky.onSkyMuted;
 
   const todayEvents = useMemo(() => {
     const visible = new Set(state.calendars.filter((c) => c.visible).map((c) => c.id));
@@ -52,7 +54,7 @@ export default function SmartSuggestionScreen({ navigation }: any) {
   }, [state.events, state.calendars, todayKey]);
 
   const todayTasks = useMemo(
-    () => state.tasks.filter((t) => (t.dueDate === todayKey) || (!t.dueDate && !t.done) || (t.dueDate && t.dueDate < todayKey && !t.done)),
+    () => state.tasks.filter((t) => t.dueDate === todayKey || (!t.dueDate && !t.done) || (t.dueDate && t.dueDate < todayKey && !t.done)),
     [state.tasks, todayKey]
   );
 
@@ -62,413 +64,513 @@ export default function SmartSuggestionScreen({ navigation }: any) {
       place: activePlace,
       weather,
       events: todayEvents,
+      allEvents: state.events,
       tasks: todayTasks,
       allTasks: state.tasks,
+      reminders: state.reminders,
+      integrations: state.integrations,
       settings,
       userName: state.user?.name ?? 'there',
       now: new Date(),
     };
-  }, [weather, activePlace, todayEvents, todayTasks, state.tasks, settings, state.user]);
+  }, [weather, activePlace, todayEvents, state.events, todayTasks, state.tasks, state.reminders, state.integrations, settings, state.user]);
 
+  // Proactive recommendations generated from user's real weather, calendar, and tasks
   const suggestions: Suggestion[] = useMemo(() => (planCtx ? generateSuggestions(planCtx) : []), [planCtx]);
 
-  // Ask Clever conversation state
+  // Conversational questions state
   const [askQuery, setAskQuery] = useState('');
-  const [conversation, setConversation] = useState<ChatMessage[]>([]);
   const [asking, setAsking] = useState(false);
-  const [activeAction, setActiveAction] = useState<CleverAction | null>(null);
-  const [actionDone, setActionDone] = useState(false);
-  const [followupChips, setFollowupChips] = useState<string[]>([]);
-  const inputRef = useRef<TextInput>(null);
+  const [answers, setAnswers] = useState<ChatMessage[]>([]);
   const scrollRef = useRef<ScrollView>(null);
+  const inputRef = useRef<TextInput>(null);
 
-  const handleSend = useCallback(async (q?: string) => {
-    const question = (q ?? askQuery).trim();
-    if (!question || !planCtx || asking) return;
-    Keyboard.dismiss();
-    setAskQuery('');
-    setAsking(true);
-    setActiveAction(null);
-    setActionDone(false);
+  const handleSend = useCallback(
+    async (q?: string) => {
+      const question = (q ?? askQuery).trim();
+      if (!question || !planCtx || asking) return;
+      Keyboard.dismiss();
+      setAskQuery('');
+      setAsking(true);
 
-    const userMsg: ChatMessage = {
-      id: uid('msg'),
-      role: 'user',
-      text: question,
-      timestamp: Date.now(),
-    };
-
-    const newHistory = [...conversation, userMsg];
-    setConversation(newHistory);
-
-    try {
-      const result = await askGemini(question, planCtx, newHistory);
-      const assistantMsg: ChatMessage = {
+      const userMsg: ChatMessage = {
         id: uid('msg'),
-        role: 'assistant',
-        text: result.text,
+        role: 'user',
+        text: question,
         timestamp: Date.now(),
-        action: result.action,
-        chips: result.chips,
       };
-      setConversation((prev) => [...prev, assistantMsg]);
-      if (result.action) {
-        setActiveAction(result.action);
+
+      const newHistory = [...answers, userMsg];
+      setAnswers(newHistory);
+
+      try {
+        const result = await askGemini(question, planCtx, newHistory);
+        const assistantMsg: ChatMessage = {
+          id: uid('msg'),
+          role: 'assistant',
+          text: result.text,
+          timestamp: Date.now(),
+          action: result.action,
+          chips: result.chips,
+        };
+        setAnswers((prev) => [...prev, assistantMsg]);
+      } catch {
+        const errorMsg: ChatMessage = {
+          id: uid('msg'),
+          role: 'assistant',
+          text: "I couldn't complete that request right now. Please try asking again in a moment.",
+          timestamp: Date.now(),
+        };
+        setAnswers((prev) => [...prev, errorMsg]);
+      } finally {
+        setAsking(false);
+        setTimeout(() => {
+          scrollRef.current?.scrollToEnd({ animated: true });
+        }, 120);
       }
-      setFollowupChips(result.chips || []);
-    } catch {
-      const errorMsg: ChatMessage = {
-        id: uid('msg'),
-        role: 'assistant',
-        text: 'Sorry, I ran into an issue getting that answer. Please try again!',
-        timestamp: Date.now(),
-      };
-      setConversation((prev) => [...prev, errorMsg]);
-    } finally {
-      setAsking(false);
-      setTimeout(() => {
-        scrollRef.current?.scrollToEnd({ animated: true });
-      }, 100);
-    }
-  }, [askQuery, planCtx, asking, conversation]);
+    },
+    [askQuery, planCtx, asking, answers]
+  );
 
-  const executeAction = (action: CleverAction) => {
-    if (action.kind === 'addTask' && action.task) {
-      app.addTask({
-        title: action.task.title,
-        priority: action.task.priority || 'normal',
-        context: action.task.context || 'anywhere',
-        dueDate: action.task.dueDate || todayKey,
-        dueMinutes: action.task.dueMinutes,
-        listId: 'inbox',
-        done: false,
-        source: 'local',
+  const handleAction = (action?: CleverAction | { kind: string; payload?: any }) => {
+    if (!action) return;
+    if (action.kind === 'weather') {
+      navigation.navigate('WeatherDetail');
+    } else if (action.kind === 'reminders' || action.kind === 'addReminder') {
+      navigation.navigate('Reminders');
+    } else if (action.kind === 'addTask') {
+      navigation.navigate('TaskEditor', {});
+    } else if (action.kind === 'tasks') {
+      navigation.navigate('Tasks');
+    } else if (action.kind === 'calendar' || action.kind === 'addEvent') {
+      navigation.navigate('Calendar');
+    } else if (action.kind === 'moveEvent') {
+      navigation.navigate('EventEditor', {
+        preset: {
+          title: (action as any).payload?.title ?? 'Focus block',
+          startMinutes: (action as any).payload?.start ?? 9 * 60,
+          date: todayKey,
+          kind: 'focus',
+        },
       });
-      setActionDone(true);
-    } else if (action.kind === 'addEvent' && action.event) {
-      app.addEvent({
-        title: action.event.title,
-        date: action.event.date || todayKey,
-        startMinutes: action.event.startMinutes || 9 * 60,
-        endMinutes: action.event.endMinutes || 10 * 60,
-        allDay: Boolean(action.event.allDay),
-        isOutdoor: Boolean(action.event.isOutdoor),
-        kind: 'personal',
-        calendarId: state.calendars[0]?.id ?? 'cal_personal',
-        source: 'local',
-      });
-      setActionDone(true);
-    } else if (action.kind === 'addReminder' && action.reminder) {
-      app.addReminder({
-        title: action.reminder.title,
-        date: action.reminder.date || todayKey,
-        minutes: action.reminder.minutes || 9 * 60,
-        trigger: action.reminder.trigger || 'time',
-        repeat: action.reminder.repeat || 'none',
-        enabled: true,
-      });
-      setActionDone(true);
-    } else if (action.kind === 'confirmAction') {
-      setActionDone(true);
+    } else {
+      navigation.navigate('Tasks');
     }
   };
 
-  const TONE_COLOR: Record<string, string> = {
-    critical: '#FF6B6B', caution: '#FFC46B', focus: '#9DB4FF', positive: '#6FE0A8', info: '#CFE3FF',
-  };
-
-  const QUICK_PROMPTS = [
-    "What's my day looking like?",
-    'Can I go outside today?',
-    'What should I prioritize?',
-    "When's the best time for a walk?",
-    'Will the weather affect my plans?',
-    'Remind me tomorrow at 8 AM to buy groceries',
-  ];
+  const bg = isDark ? '#0B1120' : '#F6F8FC';
+  const cardBg = isDark ? '#1E293B' : '#FFFFFF';
+  const cardBorder = isDark ? '#334155' : '#E2E8F0';
+  const textPrimary = isDark ? '#F8FAFC' : '#111827';
+  const textSecondary = isDark ? '#94A3B8' : '#475569';
+  const pillBg = isDark ? '#334155' : '#F1F5F9';
+  const pillText = isDark ? '#F1F5F9' : '#1E293B';
 
   return (
-    <View style={{ flex: 1 }}>
-      <WeatherBackground sky={sky} reduceMotion={settings.reduceMotion} scrim={settings.highContrast ? 0.18 : 0} />
-
-      {/* Header */}
-      <View style={{ paddingTop: insets.top + 8, paddingHorizontal: Space.lg, paddingBottom: 10, flexDirection: 'row', alignItems: 'center' }}>
-        {navigation.canGoBack() && (
-          <IconBtn
-            icon="arrow-back"
-            onPress={() => navigation.goBack()}
-            size={36}
-            bg="rgba(255,255,255,0.16)"
-            color={onSky}
-          />
-        )}
-        <View style={{ flex: 1, marginLeft: navigation.canGoBack() ? 12 : 0 }}>
-          <Txt v="title3" w="700" c={onSky}>Ask Clever</Txt>
-          <Txt v="micro" c={onSkyMuted}>Your weather-aware planning assistant</Txt>
-        </View>
-        <View style={{ width: 28, height: 28, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' }}>
-          <Ionicons name="sparkles" size={15} color={sky.accent} />
-        </View>
-      </View>
-
+    <KeyboardAvoidingView
+      style={[styles.root, { backgroundColor: bg }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       <ScrollView
         ref={scrollRef}
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: Space.lg, paddingBottom: insets.bottom + 90 }}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingTop: insets.top + 16,
+          paddingHorizontal: 20,
+          paddingBottom: insets.bottom + 140,
+        }}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Empty state when no conversation */}
-        {conversation.length === 0 && !asking && (
-          <GlassCard tint={glass.tint} border={glass.border} style={{ marginTop: Space.sm, marginBottom: Space.lg }}>
-            <View style={{ alignItems: 'center', paddingVertical: 14, gap: 8 }}>
-              <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
-                <Ionicons name="sparkles" size={24} color={sky.accent} />
-              </View>
-              <Txt v="headline" w="700" c={onSky} center>Ask Clever</Txt>
-              <Txt v="sub" c={onSkyMuted} center style={{ maxWidth: 280 }}>
-                Your weather-aware planning assistant. Ask about your day, weather conflicts, or quick tasks.
-              </Txt>
-            </View>
+        {/* ---------------- Header ---------------- */}
+        <View style={styles.header}>
+          <Text style={[styles.title, { color: textPrimary }]}>Clever Tips</Text>
+        </View>
 
-            <View style={{ marginTop: 12 }}>
-              <Txt v="micro" w="700" c={onSkyMuted} style={{ textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>
-                Quick Prompts
-              </Txt>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {QUICK_PROMPTS.map((p) => (
-                  <Chip
-                    key={p}
-                    label={p}
-                    onPress={() => {
-                      setAskQuery(p);
-                      handleSend(p);
-                    }}
-                    tint={sky.accent}
-                    fg="#0B1533"
-                    dim="rgba(255,255,255,0.16)"
-                    small
-                  />
-                ))}
-              </View>
-            </View>
-          </GlassCard>
-        )}
-
-        {/* Conversation messages */}
-        {conversation.map((msg) => (
-          <View key={msg.id} style={{ marginBottom: Space.md }}>
-            {msg.role === 'user' ? (
-              <View style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
-                <View
-                  style={{
-                    backgroundColor: sky.accent,
-                    borderRadius: 18,
-                    borderBottomRightRadius: 4,
-                    paddingHorizontal: 16,
-                    paddingVertical: 10,
-                  }}
-                >
-                  <Txt v="body" w="600" c="#0B1533">{msg.text}</Txt>
-                </View>
-                <Txt v="micro" c={onSkyMuted} style={{ alignSelf: 'flex-end', marginTop: 3, marginRight: 4 }}>
-                  {formatTime(msg.timestamp, settings.use24h)}
-                </Txt>
-              </View>
-            ) : (
-              <GlassCard tint={glass.tint} border={glass.border} style={{ maxWidth: '95%' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                  <View style={{ width: 22, height: 22, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' }}>
-                    <Ionicons name="sparkles" size={12} color={sky.accent} />
-                  </View>
-                  <Txt v="micro" w="700" c={onSkyMuted} style={{ textTransform: 'uppercase', letterSpacing: 0.8, flex: 1 }}>
-                    Clever
-                  </Txt>
-                  <Badge label="GEMINI 2.5" color={onSky} bg="rgba(255,255,255,0.16)" />
-                </View>
-                <Txt v="body" c={onSky} style={{ lineHeight: 23 }}>{msg.text}</Txt>
-
-                {/* Message Action Card */}
-                {msg.action && !actionDone && (
-                  <View style={{ marginTop: 14, padding: 12, borderRadius: Radius.md, backgroundColor: 'rgba(255,255,255,0.10)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', gap: 8 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <Ionicons
-                        name={
-                          msg.action.kind === 'addTask'
-                            ? 'checkmark-circle-outline'
-                            : msg.action.kind === 'addEvent'
-                            ? 'calendar-outline'
-                            : msg.action.kind === 'addReminder'
-                            ? 'alarm-outline'
-                            : 'alert-circle-outline'
-                        }
-                        size={16}
-                        color={sky.accent}
-                      />
-                      <Txt v="sub" w="700" c={onSky}>
-                        {msg.action.kind === 'addTask'
-                          ? `Add "${msg.action.task?.title}" as a task?`
-                          : msg.action.kind === 'addEvent'
-                          ? `Add "${msg.action.event?.title}" to calendar?`
-                          : msg.action.kind === 'addReminder'
-                          ? `Set reminder for "${msg.action.reminder?.title}"?`
-                          : msg.action.description || 'Confirm action?'}
-                      </Txt>
-                    </View>
-                    <Btn
-                      title={
-                        msg.action.kind === 'addTask'
-                          ? 'Add task'
-                          : msg.action.kind === 'addEvent'
-                          ? 'Add event'
-                          : msg.action.kind === 'addReminder'
-                          ? 'Set reminder'
-                          : 'Confirm'
-                      }
-                      icon="checkmark"
-                      kind="glass"
-                      tint="rgba(255,255,255,0.22)"
-                      onTint={onSky}
-                      small
-                      onPress={() => executeAction(msg.action!)}
-                    />
-                  </View>
-                )}
-
-                {msg.action && actionDone && (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 }}>
-                    <Ionicons name="checkmark-circle" size={15} color={sky.accent} />
-                    <Txt v="sub" w="600" c={onSky}>Action completed.</Txt>
-                  </View>
-                )}
-
-                {/* Followup prompt chips */}
-                {msg.chips && msg.chips.length > 0 && (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginTop: 14 }}>
-                    {msg.chips.map((c) => (
-                      <Chip
-                        key={c}
-                        label={c}
-                        onPress={() => {
-                          setAskQuery(c);
-                          handleSend(c);
-                        }}
-                        tint={sky.accent}
-                        fg="#0B1533"
-                        dim="rgba(255,255,255,0.16)"
-                        small
-                      />
-                    ))}
-                  </ScrollView>
-                )}
-              </GlassCard>
-            )}
+        {/* ---------------- Intro Bubble ---------------- */}
+        <View style={styles.introRow}>
+          {/* Sparkle Icon Badge */}
+          <View style={[styles.sparkleBadge, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+            <Ionicons name="sparkles" size={17} color="#4F46E5" />
           </View>
-        ))}
 
-        {/* Loading skeleton */}
-        {asking && (
-          <GlassCard tint={glass.tint} border={glass.border} style={{ marginBottom: Space.md, maxWidth: '95%' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <ActivityIndicator size="small" color={sky.accent} />
-              <Txt v="micro" w="700" c={onSkyMuted} style={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>
-                Clever is thinking...
-              </Txt>
-            </View>
-            <View style={{ gap: 8 }}>
-              <Skeleton w={width - Space.lg * 4} h={15} r={8} />
-              <Skeleton w={(width - Space.lg * 4) * 0.75} h={15} r={8} />
-              <Skeleton w={(width - Space.lg * 4) * 0.5} h={15} r={8} />
-            </View>
-          </GlassCard>
-        )}
-
-        {/* Today's insights section */}
-        {conversation.length === 0 && (
-          <View style={{ marginTop: Space.xs }}>
-            <Txt v="headline" w="700" c={onSky} style={{ marginBottom: Space.sm }}>Today's insights</Txt>
-            {suggestions.length === 0
-              ? Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} w={width - Space.lg * 2} h={120} r={16} style={{ marginBottom: 10 }} />)
-              : suggestions.map((s) => (
-                  <GlassCard key={s.id} tint={glass.tint} border={glass.border} style={{ marginBottom: 10 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                      <View style={{ width: 26, height: 26, borderRadius: 9, backgroundColor: `${TONE_COLOR[s.tone]}33`, alignItems: 'center', justifyContent: 'center' }}>
-                        <Ionicons name={s.icon as any} size={14} color={TONE_COLOR[s.tone]} />
-                      </View>
-                      <Txt v="micro" w="700" c={onSkyMuted} style={{ textTransform: 'uppercase', letterSpacing: 0.7, flex: 1 }}>{s.tag}</Txt>
-                      <Badge label={`${Math.round(s.confidence * 100)}%`} color={onSky} bg="rgba(255,255,255,0.16)" />
-                    </View>
-                    <Txt v="headline" w="700" c={onSky} style={{ lineHeight: 22 }}>{s.title}</Txt>
-                    <Txt v="sub" c={onSkyMuted} style={{ marginTop: 6, lineHeight: 19 }} numberOfLines={4}>{s.body}</Txt>
-                    {s.action && (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 10 }}>
-                        <Txt v="sub" w="700" c={sky.accent}>{s.action.label}</Txt>
-                        <Ionicons name="arrow-forward" size={13} color={sky.accent} />
-                      </View>
-                    )}
-                  </GlassCard>
-                ))}
+          {/* Intro Speech Bubble */}
+          <View style={[styles.introBubble, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+            <Text style={[styles.introText, { color: textPrimary }]}>
+              Here is what I see for your day.
+            </Text>
           </View>
-        )}
+        </View>
+
+        {/* ---------------- Proactive Recommendation Cards List ---------------- */}
+        <View style={styles.cardsList}>
+          {suggestions.map((s, index) => {
+            const accentColor = ACCENT_COLORS[s.tone] || (index === 0 ? '#F59E0B' : index === 1 ? '#F59E0B' : '#3B82F6');
+
+            return (
+              <View
+                key={s.id}
+                style={[
+                  styles.recCard,
+                  { backgroundColor: cardBg, borderColor: cardBorder },
+                ]}
+              >
+                {/* Left Colored Accent Bar */}
+                <View style={[styles.cardAccentBar, { backgroundColor: accentColor }]} />
+
+                <View style={styles.cardContent}>
+                  {/* Card Title */}
+                  <Text style={[styles.cardTitle, { color: textPrimary }]}>{s.title}</Text>
+
+                  {/* Card Body */}
+                  <Text style={[styles.cardBody, { color: textSecondary }]}>{s.body}</Text>
+
+                  {/* Action Pill Button */}
+                  {s.action && (
+                    <Pressable
+                      onPress={() => handleAction(s.action)}
+                      style={({ pressed }) => [
+                        styles.actionPill,
+                        { backgroundColor: pillBg },
+                        pressed && { opacity: 0.75 },
+                      ]}
+                    >
+                      <Text style={[styles.actionPillText, { color: pillText }]}>
+                        {s.action.label}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+
+          {/* When user asks questions: render them cleanly in card format */}
+          {answers.map((ans) => {
+            if (ans.role === 'user') {
+              return (
+                <View key={ans.id} style={styles.userBubbleContainer}>
+                  <View style={styles.userBubble}>
+                    <Text style={styles.userBubbleText}>{ans.text}</Text>
+                  </View>
+                </View>
+              );
+            }
+
+            return (
+              <View
+                key={ans.id}
+                style={[
+                  styles.recCard,
+                  { backgroundColor: cardBg, borderColor: cardBorder, marginTop: 6 },
+                ]}
+              >
+                <View style={[styles.cardAccentBar, { backgroundColor: '#4F46E5' }]} />
+                <View style={styles.cardContent}>
+                  <View style={styles.answerHeaderRow}>
+                    <Ionicons name="sparkles" size={14} color="#4F46E5" />
+                    <Text style={styles.answerLabel}>Clever Tips</Text>
+                  </View>
+                  <Text style={[styles.cardBody, { color: textPrimary, marginTop: 4 }]}>
+                    {ans.text}
+                  </Text>
+
+                  {ans.action && (
+                    <Pressable
+                      onPress={() => handleAction(ans.action)}
+                      style={({ pressed }) => [
+                        styles.actionPill,
+                        { backgroundColor: pillBg },
+                        pressed && { opacity: 0.75 },
+                      ]}
+                    >
+                      <Text style={[styles.actionPillText, { color: pillText }]}>
+                        {ans.action.kind === 'addTask' ? 'Add a task' : 'View details'}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+
+          {/* Loading Indicator */}
+          {asking && (
+            <View style={[styles.loadingCard, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+              <ActivityIndicator size="small" color="#4F46E5" />
+              <Text style={[styles.loadingText, { color: textSecondary }]}>
+                Clever Tips is checking your day...
+              </Text>
+            </View>
+          )}
+        </View>
       </ScrollView>
 
-      {/* Input Bar pinned above tabs */}
+      {/* ---------------- Pinned Bottom Input & Quick Prompts ---------------- */}
       <View
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: insets.bottom + 68,
-          paddingHorizontal: Space.lg,
-          paddingVertical: 6,
-        }}
+        style={[
+          styles.bottomContainer,
+          {
+            paddingBottom: Math.max(insets.bottom, 14) + 68,
+            backgroundColor: bg,
+          },
+        ]}
       >
-        <GlassCard tint={glass.tint} border={glass.border} padded={false} style={{ paddingHorizontal: 12, paddingVertical: 6 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <Ionicons name="chatbubble-ellipses-outline" size={18} color={onSkyMuted} />
-            <TextInput
-              ref={inputRef}
-              placeholder="Ask Clever anything..."
-              placeholderTextColor={onSkyMuted}
-              value={askQuery}
-              onChangeText={setAskQuery}
-              onSubmitEditing={() => handleSend()}
-              returnKeyType="send"
-              editable={!asking}
-              style={{
-                flex: 1,
-                color: onSky,
-                fontSize: 15,
-                fontWeight: '500',
-                letterSpacing: -0.1,
-                paddingVertical: Platform.OS === 'web' ? 6 : 4,
-                // @ts-ignore web
-                outlineStyle: 'none',
-              }}
-            />
-            <Touch
-              onPress={() => handleSend()}
-              disabled={!askQuery.trim() || asking}
-              scale={0.9}
+        {/* Quick Prompts Chips */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.quickPromptsRow}
+        >
+          {QUICK_PROMPTS.map((prompt) => (
+            <Pressable
+              key={prompt}
+              onPress={() => handleSend(prompt)}
+              style={({ pressed }) => [
+                styles.quickPromptChip,
+                { backgroundColor: cardBg, borderColor: cardBorder },
+                pressed && { opacity: 0.8 },
+              ]}
             >
-              <View
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 32,
-                  backgroundColor: askQuery.trim() && !asking ? sky.accent : 'rgba(255,255,255,0.12)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <Ionicons
-                  name="arrow-up"
-                  size={16}
-                  color={askQuery.trim() && !asking ? '#0B1533' : onSkyMuted}
-                />
-              </View>
-            </Touch>
-          </View>
-        </GlassCard>
+              <Text style={[styles.quickPromptText, { color: textPrimary }]}>{prompt}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        {/* Compact iOS-Style Question Input Box */}
+        <View style={[styles.inputBox, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+          <TextInput
+            ref={inputRef}
+            placeholder="What should I wear? Where are my free hours?"
+            placeholderTextColor={isDark ? '#64748B' : '#94A3B8'}
+            value={askQuery}
+            onChangeText={setAskQuery}
+            onSubmitEditing={() => handleSend()}
+            returnKeyType="send"
+            editable={!asking}
+            style={[styles.textInput, { color: textPrimary }]}
+          />
+          <Pressable
+            onPress={() => handleSend()}
+            disabled={!askQuery.trim() || asking}
+            style={({ pressed }) => [
+              styles.sendButton,
+              {
+                backgroundColor: askQuery.trim() && !asking ? '#6366F1' : '#A5B4FC',
+                opacity: pressed ? 0.85 : 1,
+              },
+            ]}
+          >
+            <Ionicons name="send" size={15} color="#FFFFFF" style={{ marginLeft: 2 }} />
+          </Pressable>
+        </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
+  header: {
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  introRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 20,
+  },
+  sparkleBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({
+      web: { boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)' } as any,
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 6,
+        elevation: 1,
+      },
+    }),
+  },
+  introBubble: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 20,
+    borderTopLeftRadius: 6,
+    borderWidth: 1,
+    flex: 1,
+    ...Platform.select({
+      web: { boxShadow: '0 2px 10px rgba(0, 0, 0, 0.04)' } as any,
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+        elevation: 2,
+      },
+    }),
+  },
+  introText: {
+    fontSize: 15,
+    fontWeight: '500',
+    letterSpacing: -0.1,
+  },
+  cardsList: {
+    gap: 14,
+  },
+  recCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    ...Platform.select({
+      web: { boxShadow: '0 4px 20px rgba(0, 0, 0, 0.03)' } as any,
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 10,
+        elevation: 2,
+      },
+    }),
+  },
+  cardAccentBar: {
+    width: 4.5,
+  },
+  cardContent: {
+    flex: 1,
+    padding: 18,
+  },
+  cardTitle: {
+    fontSize: 16.5,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+    marginBottom: 6,
+  },
+  cardBody: {
+    fontSize: 13.5,
+    lineHeight: 20,
+    fontWeight: '400',
+    marginBottom: 12,
+  },
+  actionPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: 999,
+    alignSelf: 'flex-start',
+  },
+  actionPillText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  userBubbleContainer: {
+    alignSelf: 'flex-end',
+    maxWidth: '85%',
+    marginVertical: 4,
+  },
+  userBubble: {
+    backgroundColor: '#6366F1',
+    borderRadius: 18,
+    borderBottomRightRadius: 4,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  userBubbleText: {
+    color: '#FFFFFF',
+    fontSize: 14.5,
+    fontWeight: '500',
+  },
+  answerHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  answerLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4F46E5',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  loadingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 16,
+    borderRadius: 18,
+    borderWidth: 1,
+  },
+  loadingText: {
+    fontSize: 13.5,
+    fontWeight: '500',
+  },
+  bottomContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  quickPromptsRow: {
+    gap: 8,
+    paddingBottom: 8,
+  },
+  quickPromptChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  quickPromptText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  inputBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingLeft: 16,
+    paddingRight: 6,
+    paddingVertical: Platform.OS === 'web' ? 6 : 4,
+    ...Platform.select({
+      web: { boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)' } as any,
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+        elevation: 3,
+      },
+    }),
+  },
+  textInput: {
+    flex: 1,
+    fontSize: 14.5,
+    fontWeight: '400',
+    paddingVertical: 6,
+    // @ts-ignore web
+    outlineStyle: 'none',
+  },
+  sendButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

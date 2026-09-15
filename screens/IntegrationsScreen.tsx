@@ -41,14 +41,26 @@ export default function IntegrationsScreen({ navigation }: any) {
   const connected = (i.googleCalendar || i.googleTasks) && Boolean(i.account);
 
   // Setup OAuth Request
-  const redirectUri = AuthSession.makeRedirectUri({
-    scheme: 'agon',
-    path: 'auth/google/callback',
-  });
+  const redirectUri =
+    process.env.EXPO_PUBLIC_GOOGLE_REDIRECT_URI ||
+    process.env.GOOGLE_REDIRECT_URI ||
+    process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI ||
+    (Platform.OS === 'web' && typeof window !== 'undefined'
+      ? `${window.location.origin}/auth/google/callback`
+      : AuthSession.makeRedirectUri({
+          scheme: 'weatherwhattodo',
+          path: 'auth/google/callback',
+        }));
 
   const googleClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
     process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
-    '1084284897213-placeholder.apps.googleusercontent.com';
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    '767576613120-nfakoenf0n4d1sihfok0r3pd00tor2r8.apps.googleusercontent.com';
+
+  console.log('Google OAuth redirect URI:', redirectUri);
+  console.log('Google OAuth client ID:', googleClientId);
+
 
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
@@ -121,7 +133,7 @@ export default function IntegrationsScreen({ navigation }: any) {
           });
         }
       } else if (res?.type === 'error') {
-        setErrorMsg(res.error?.message || 'Authentication error occurred');
+        setErrorMsg((res.error as any)?.message || (res.error as any)?.description || (res.error as any)?.code || 'Authentication error occurred');
       }
     } catch (err: any) {
       console.error('Google connect error:', err);

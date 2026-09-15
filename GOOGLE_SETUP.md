@@ -1,13 +1,13 @@
 # Google Calendar & Tasks Integration Setup Guide
 
-This guide walks you through setting up real Google OAuth 2.0, Google Calendar API v3, and Google Tasks API v1 for the **Agon Preview / WeatherTodo** app.
+This guide walks you through setting up real Google OAuth 2.0, Google Calendar API v3, and Google Tasks API v1 for the **Weather What To-Do** app.
 
 ---
 
 ## 1. Google Cloud Console Setup
 
 1. Open the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (e.g. `Agon App`) or select your existing project.
+2. Select your existing Google Cloud project or create a new project.
 3. In the left navigation, go to **APIs & Services** → **Library**:
    - Search for **Google Calendar API** and click **Enable**.
    - Search for **Google Tasks API** and click **Enable**.
@@ -19,7 +19,7 @@ This guide walks you through setting up real Google OAuth 2.0, Google Calendar A
 1. Go to **APIs & Services** → **OAuth consent screen**.
 2. Select **External** user type and click **Create**.
 3. Fill in the App Information:
-   - **App name**: `Agon` (or `Arcada Agon`)
+   - **App name**: `Weather What To-Do`
    - **User support email**: Your email address
    - **Developer contact information**: Your email address
 4. Click **Save and Continue** to advance to **Scopes**.
@@ -35,47 +35,38 @@ This guide walks you through setting up real Google OAuth 2.0, Google Calendar A
 
 ## 3. Create OAuth 2.0 Credentials
 
-### A. Web Client ID (Primary / Unified)
+### A. Web Client ID (Web Application)
 1. Go to **APIs & Services** → **Credentials** → **Create Credentials** → **OAuth client ID**.
 2. Set **Application type** to **Web application**.
-3. Set **Name** to `Agon Web & Mobile Proxy`.
+3. Set **Name** to `Weather What To-Do Web & Mobile Proxy`.
 4. Under **Authorized JavaScript origins**, add:
-   - `https://arcada.app` (your production domain)
-   - `https://<your-vercel-deployment>.vercel.app`
    - `http://localhost:8081` (Expo web local dev)
-   - `http://localhost:19006` (Expo dev)
+   - `https://weatherwhattodo.netlify.app` (Production Netlify frontend)
 5. Under **Authorized redirect URIs**, add:
-   - `https://arcada.app/auth/google/callback`
-   - `https://<your-vercel-deployment>.vercel.app/auth/google/callback`
-   - `http://localhost:8081/auth/google/callback`
-   - `agon://auth/google/callback` (for Expo custom scheme on native)
+   - `http://localhost:8081/auth/google/callback` (Local dev callback)
+   - `https://weatherwhattodo.netlify.app/auth/google/callback` (Production frontend callback)
+   - `weatherwhattodo://auth/google/callback` (for Expo custom scheme on native)
 6. Click **Create**.
 7. Copy the **Client ID** and **Client Secret**.
 
 ---
 
-## 4. Serverless & Environment Configuration
+## 4. Environment Configuration
 
-### Vercel Deployment Settings
-In your Vercel Project Dashboard → **Settings** → **Environment Variables**, add:
+### Netlify Deployment Settings
+In your Netlify Dashboard → **Site configuration** → **Environment variables**, add:
 
 ```env
-GOOGLE_WEB_CLIENT_ID=<your-web-client-id>.apps.googleusercontent.com
-GOOGLE_WEB_CLIENT_SECRET=<your-web-client-secret>
+EXPO_PUBLIC_GOOGLE_CLIENT_ID=<your-web-client-id>.apps.googleusercontent.com
 ```
 
-### Render Deployment Settings (if using Render backend)
-In your Render Dashboard for `weathertodo-backend` → **Environment**, add:
+### Render Deployment Settings (for `weatherwhattodo-backend`)
+In your Render Dashboard for `weatherwhattodo-backend` → **Environment**, add:
 
 ```env
-GOOGLE_WEB_CLIENT_ID=<your-web-client-id>.apps.googleusercontent.com
-GOOGLE_WEB_CLIENT_SECRET=<your-web-client-secret>
-```
-
-### Expo Client Environment Variables (Optional / Build Time)
-If you want to configure the client-side Web Client ID at build time:
-```env
-EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=<your-web-client-id>.apps.googleusercontent.com
+GOOGLE_CLIENT_ID=<your-web-client-id>.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=<your-web-client-secret>
+GEMINI_API_KEY=<your-gemini-api-key>
 ```
 
 ---

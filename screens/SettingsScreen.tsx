@@ -40,8 +40,8 @@ export default function SettingsScreen({ navigation }: any) {
             </View>
             <Segmented
               options={[{ key: 'concise', label: 'Concise' }, { key: 'balanced', label: 'Balanced' }, { key: 'detailed', label: 'Detailed' }]}
-              value={s.geminiTone}
-              onChange={(v) => app.setSettings({ geminiTone: v })}
+              value={s.geminiTone || 'balanced'}
+              onChange={(v) => app.setSettings({ geminiTone: v as 'concise' | 'balanced' | 'detailed' })}
             />
           </View>
           <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: theme.hairline, marginLeft: 58 }} />
@@ -49,7 +49,7 @@ export default function SettingsScreen({ navigation }: any) {
             icon="bulb-outline"
             title="Proactive suggestions"
             subtitle="Surface insights on the home dashboard"
-            right={<Toggle value={s.autoSuggest} onChange={(v) => app.setSettings({ autoSuggest: v })} />}
+            right={<Toggle value={s.autoSuggest ?? true} onChange={(v) => app.setSettings({ autoSuggest: v })} />}
             last
           />
         </ListGroup>
@@ -112,7 +112,7 @@ export default function SettingsScreen({ navigation }: any) {
 
       <Sheet visible={keySheet} onClose={() => setKeySheet(false)} title="Gemini API key">
         <Txt v="callout" c={theme.textSecondary} style={{ lineHeight: 21, marginBottom: Space.md }}>
-          Paste a Google AI Studio key to let Ask Clever answer with the live Gemini model. Your key is stored only on this device and is sent directly to Google.
+          Paste a Google AI Studio key to let Clever Tips answer with the live Gemini model. Your key is stored only on this device and is sent directly to Google.
         </Txt>
         <TextInput
           value={keyDraft}
@@ -129,7 +129,7 @@ export default function SettingsScreen({ navigation }: any) {
             outlineStyle: 'none',
           }}
         />
-        <Btn title="Save key" full onPress={() => { app.setSettings({ geminiKey: keyDraft.trim() }); setKeySheet(false); }} />
+        <Btn title="Save key" full onPress={() => { app.setSettings({ geminiKey: (keyDraft || '').trim() }); setKeySheet(false); }} />
         {!!s.geminiKey && (
           <>
             <View style={{ height: 8 }} />

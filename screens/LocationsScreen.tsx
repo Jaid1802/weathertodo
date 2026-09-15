@@ -39,6 +39,33 @@ export default function LocationsScreen({ navigation }: any) {
     setLocating(true);
     setError(null);
     try {
+      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            try {
+              const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+              app.addPlace({ ...place, id: 'current' });
+              app.setActivePlace('current');
+              setLocating(false);
+              navigation.goBack();
+            } catch (e) {
+              setError('Could not determine your location. Try searching instead.');
+              setLocating(false);
+            }
+          },
+          (err) => {
+            if (err.code === 1) {
+              setError('Location permission denied. Search for a city instead.');
+            } else {
+              setError('Could not determine your location. Try searching instead.');
+            }
+            setLocating(false);
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+        );
+        return;
+      }
+
       const Location = await import('expo-location');
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
@@ -49,6 +76,7 @@ export default function LocationsScreen({ navigation }: any) {
       const pos = await Location.getCurrentPositionAsync({});
       const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
       app.addPlace({ ...place, id: 'current' });
+      app.setActivePlace('current');
       navigation.goBack();
     } catch (e) {
       setError('Could not determine your location. Try searching instead.');

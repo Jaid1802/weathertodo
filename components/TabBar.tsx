@@ -9,6 +9,7 @@ const ICONS: Record<string, { on: keyof typeof Ionicons.glyphMap; off: keyof typ
   Home: { on: 'home', off: 'home-outline' },
   Calendar: { on: 'calendar', off: 'calendar-outline' },
   Clever: { on: 'sparkles', off: 'sparkles-outline' },
+  'Clever Tips': { on: 'sparkles', off: 'sparkles-outline' },
   'Ask Clever': { on: 'sparkles', off: 'sparkles-outline' },
   Tasks: { on: 'checkmark-circle', off: 'checkmark-circle-outline' },
   Profile: { on: 'person', off: 'person-outline' },

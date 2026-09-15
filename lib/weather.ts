@@ -118,7 +118,6 @@ export interface Place {
 }
 
 export const DEFAULT_PLACES: Place[] = [
-  { id: 'sf', name: 'San Francisco', region: 'California', country: 'United States', countryCode: 'US', lat: 37.7749, lon: -122.4194 },
   { id: 'nyc', name: 'New York', region: 'New York', country: 'United States', countryCode: 'US', lat: 40.7128, lon: -74.006 },
   { id: 'ldn', name: 'London', region: 'England', country: 'United Kingdom', countryCode: 'GB', lat: 51.5072, lon: -0.1276 },
   { id: 'tky', name: 'Tokyo', country: 'Japan', countryCode: 'JP', lat: 35.6762, lon: 139.6503 },
@@ -126,9 +125,15 @@ export const DEFAULT_PLACES: Place[] = [
   { id: 'syd', name: 'Sydney', region: 'NSW', country: 'Australia', countryCode: 'AU', lat: -33.8688, lon: 151.2093 },
   { id: 'ber', name: 'Berlin', country: 'Germany', countryCode: 'DE', lat: 52.52, lon: 13.405 },
   { id: 'dxb', name: 'Dubai', country: 'UAE', countryCode: 'AE', lat: 25.2048, lon: 55.2708 },
+  { id: 'sf', name: 'San Francisco', region: 'California', country: 'United States', countryCode: 'US', lat: 37.7749, lon: -122.4194 },
 ];
 
-export const DEFAULT_PLACE: Place = DEFAULT_PLACES[0];
+export const DEFAULT_PLACE: Place = {
+  id: 'current',
+  name: 'Current location',
+  lat: 12.9716,
+  lon: 77.5946,
+};
 
 /* ---------------------------- unit helpers ---------------------------- */
 
@@ -378,29 +383,68 @@ export async function searchPlaces(query: string): Promise<Place[]> {
 }
 
 export async function reverseGeocode(lat: number, lon: number): Promise<Place> {
-  const { signal, cancel } = withTimeout(7000);
+  // 1. Try BigDataCloud client reverse geocoding (fast, accurate, free client API)
+  const { signal: s1, cancel: c1 } = withTimeout(6000);
   try {
     const res = await fetch(
-      `https://geocoding-api.open-meteo.com/v1/search?name=&latitude=${lat}&longitude=${lon}&count=1`,
-      { signal }
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`,
+      { signal: s1 }
     );
-    cancel();
-    const j: any = await res.json();
-    const r = j?.results?.[0];
-    if (r) {
-      return { id: `geo_${r.id}`, name: r.name, region: r.admin1, country: r.country, countryCode: r.country_code, lat, lon };
+    c1();
+    if (res.ok) {
+      const data: any = await res.json();
+      const name = data.city || data.locality || data.principalSubdivision || data.localityInfo?.administrative?.[2]?.name || data.localityInfo?.administrative?.[1]?.name;
+      if (name) {
+        return {
+          id: 'current',
+          name,
+          region: data.principalSubdivision || data.countryName,
+          country: data.countryName,
+          countryCode: data.countryCode,
+          lat,
+          lon,
+        };
+      }
     }
   } catch {
-    cancel();
+    c1();
   }
-  // Nearest known city fallback
-  let best = DEFAULT_PLACES[0];
-  let bestD = Infinity;
-  for (const p of DEFAULT_PLACES) {
-    const d = (p.lat - lat) ** 2 + (p.lon - lon) ** 2;
-    if (d < bestD) { bestD = d; best = p; }
+
+  // 2. Try OpenStreetMap Nominatim as fallback
+  const { signal: s2, cancel: c2 } = withTimeout(6000);
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`,
+      { signal: s2, headers: { 'Accept-Language': 'en' } }
+    );
+    c2();
+    if (res.ok) {
+      const data: any = await res.json();
+      const addr = data.address || {};
+      const name = addr.city || addr.town || addr.village || addr.municipality || addr.suburb || addr.county || addr.state;
+      if (name) {
+        return {
+          id: 'current',
+          name,
+          region: addr.state || addr.county,
+          country: addr.country,
+          countryCode: (addr.country_code || '').toUpperCase(),
+          lat,
+          lon,
+        };
+      }
+    }
+  } catch {
+    c2();
   }
-  return { ...best, id: 'current', lat, lon, name: bestD < 4 ? best.name : 'Current location' };
+
+  // 3. Fallback with actual coordinates — never fabricate a city name
+  return {
+    id: 'current',
+    name: 'Current location',
+    lat,
+    lon,
+  };
 }
 
 /* ---------------------------- derived insights ---------------------------- */

@@ -124,7 +124,7 @@ export interface CleverAction {
   description?: string;
   data?: any;
   task?: { title: string; priority?: Priority; context?: TaskContext; dueDate?: string; dueMinutes?: number };
-  event?: { title: string; date?: string; startMinutes?: number; endMinutes?: number; isOutdoor?: boolean; location?: string };
+  event?: { title: string; date?: string; startMinutes?: number; endMinutes?: number; isOutdoor?: boolean; allDay?: boolean; location?: string };
   reminder?: { title: string; date?: string; minutes?: number; trigger?: ReminderTrigger; repeat?: ReminderRepeat };
   targetId?: string;
   confirmed?: boolean;
