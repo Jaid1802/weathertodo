@@ -337,7 +337,7 @@ export function generateSuggestions(ctx: PlanContext): Suggestion[] {
   }
 
   /* 13. Nothing planned --------------------------------------------------- */
-  if (!sorted.length && !openTasks.length) {
+  if (!sorted.length && !openTasks.length && !out.some((s) => s.title === 'Your day is a blank page')) {
     out.push({
       id: uid('sg'),
       icon: 'add-circle',
@@ -350,9 +350,17 @@ export function generateSuggestions(ctx: PlanContext): Suggestion[] {
     });
   }
 
-  return out
-    .sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || b.confidence - a.confidence)
-    .slice(0, 6);
+  const unique: Suggestion[] = [];
+  const seenKeys = new Set<string>();
+  for (const s of out.sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || b.confidence - a.confidence)) {
+    const key = `${s.title.trim()}|${s.body.trim()}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      unique.push(s);
+    }
+  }
+
+  return unique.slice(0, 6);
 }
 
 /* ------------------------------------------------------------------ */

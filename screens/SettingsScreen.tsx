@@ -1,18 +1,16 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Badge, Btn, Card, IconBtn, ListGroup, Row, Segmented, Sheet, Toggle, Touch, Txt } from '../components/ui';
+import { Btn, IconBtn, ListGroup, Row, Segmented, Sheet, Toggle, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
-import { Radius, Space } from '../lib/theme';
+import { Space } from '../lib/theme';
 import { formatTime } from '../lib/utils';
 
 export default function SettingsScreen({ navigation }: any) {
   const app = useApp();
   const { state, theme } = app;
   const s = state.settings;
-  const [keySheet, setKeySheet] = useState(false);
-  const [keyDraft, setKeyDraft] = useState(s.geminiKey);
   const [confirmReset, setConfirmReset] = useState(false);
 
   return (
@@ -23,37 +21,6 @@ export default function SettingsScreen({ navigation }: any) {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: Space.lg, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
-        {/* Smart Suggestion */}
-        <ListGroup title="Smart Suggestion" footer="Without a key, Smart Suggestion reasons entirely on-device using your weather, calendar and task data. Nothing leaves the phone.">
-          <Row
-            icon="key-outline"
-            title="Gemini API key"
-            subtitle={s.geminiKey ? `Connected · ••••${s.geminiKey.slice(-4)}` : 'Not connected — using on-device reasoning'}
-            onPress={() => { setKeyDraft(s.geminiKey); setKeySheet(true); }}
-          />
-          <View style={{ paddingHorizontal: Space.md, paddingVertical: 13, gap: 10 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <View style={{ width: 30, height: 30, borderRadius: 9, backgroundColor: theme.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="chatbubble-ellipses-outline" size={17} color={theme.accent} />
-              </View>
-              <Txt v="callout" w="500" style={{ flex: 1 }}>Response style</Txt>
-            </View>
-            <Segmented
-              options={[{ key: 'concise', label: 'Concise' }, { key: 'balanced', label: 'Balanced' }, { key: 'detailed', label: 'Detailed' }]}
-              value={s.geminiTone || 'balanced'}
-              onChange={(v) => app.setSettings({ geminiTone: v as 'concise' | 'balanced' | 'detailed' })}
-            />
-          </View>
-          <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: theme.hairline, marginLeft: 58 }} />
-          <Row
-            icon="bulb-outline"
-            title="Proactive suggestions"
-            subtitle="Surface insights on the home dashboard"
-            right={<Toggle value={s.autoSuggest ?? true} onChange={(v) => app.setSettings({ autoSuggest: v })} />}
-            last
-          />
-        </ListGroup>
-
         {/* Units */}
         <ListGroup title="Units & format">
           <Row
@@ -109,42 +76,6 @@ export default function SettingsScreen({ navigation }: any) {
 
         <Txt v="micro" c={theme.textTertiary} center style={{ marginTop: Space.sm }}>Weather What To-Do v1.0 · Weather data by Open-Meteo</Txt>
       </ScrollView>
-
-      <Sheet visible={keySheet} onClose={() => setKeySheet(false)} title="Gemini API key">
-        <Txt v="callout" c={theme.textSecondary} style={{ lineHeight: 21, marginBottom: Space.md }}>
-          Paste a Google AI Studio key to let Clever Tips answer with the live Gemini model. Your key is stored only on this device and is sent directly to Google.
-        </Txt>
-        <TextInput
-          value={keyDraft}
-          onChangeText={setKeyDraft}
-          placeholder="AIza…"
-          placeholderTextColor={theme.textTertiary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-          style={{
-            backgroundColor: theme.bgElevated, borderRadius: Radius.md, padding: 14, color: theme.text, fontSize: 16,
-            borderWidth: StyleSheet.hairlineWidth, borderColor: theme.border, marginBottom: Space.md,
-            // @ts-ignore
-            outlineStyle: 'none',
-          }}
-        />
-        <Btn title="Save key" full onPress={() => { app.setSettings({ geminiKey: (keyDraft || '').trim() }); setKeySheet(false); }} />
-        {!!s.geminiKey && (
-          <>
-            <View style={{ height: 8 }} />
-            <Btn title="Remove key" kind="ghost" tint={theme.danger} full onPress={() => { app.setSettings({ geminiKey: '' }); setKeyDraft(''); setKeySheet(false); }} />
-          </>
-        )}
-        <Card style={{ marginTop: Space.md, backgroundColor: theme.surfaceAlt, borderColor: 'transparent' }}>
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <Ionicons name="shield-checkmark-outline" size={16} color={theme.textSecondary} />
-            <Txt v="sub" c={theme.textSecondary} style={{ flex: 1, lineHeight: 19 }}>
-              With no key, every insight you see is generated locally from your own data. The experience stays complete either way.
-            </Txt>
-          </View>
-        </Card>
-      </Sheet>
 
       <Sheet visible={confirmReset} onClose={() => setConfirmReset(false)} title="Reset everything?">
         <Txt v="callout" c={theme.textSecondary} style={{ lineHeight: 21, marginBottom: Space.lg }}>

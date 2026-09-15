@@ -12,9 +12,8 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Touch } from '../components/ui';
 import { useApp } from '../lib/store';
 import { PlanContext, Suggestion, CleverAction, askGemini, generateSuggestions } from '../lib/gemini';
 import { ChatMessage } from '../lib/types';
@@ -77,6 +76,17 @@ export default function SmartSuggestionScreen({ navigation }: any) {
 
   // Proactive recommendations generated from user's real weather, calendar, and tasks
   const suggestions: Suggestion[] = useMemo(() => (planCtx ? generateSuggestions(planCtx) : []), [planCtx]);
+
+  // Deduplicate recommendations so the exact same card is never displayed multiple times
+  const uniqueSuggestions = useMemo(() => {
+    const seen = new Set<string>();
+    return suggestions.filter((s) => {
+      const key = `${s.title.trim()}|${s.body.trim()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [suggestions]);
 
   // Conversational questions state
   const [askQuery, setAskQuery] = useState('');
@@ -167,204 +177,216 @@ export default function SmartSuggestionScreen({ navigation }: any) {
   const pillText = isDark ? '#F1F5F9' : '#1E293B';
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.root, { backgroundColor: bg }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        ref={scrollRef}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{
-          paddingTop: insets.top + 16,
-          paddingHorizontal: 20,
-          paddingBottom: insets.bottom + 140,
-        }}
-        keyboardShouldPersistTaps="handled"
+    <SafeAreaView style={[styles.root, { backgroundColor: bg }]} edges={['top']}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         {/* ---------------- Header ---------------- */}
         <View style={styles.header}>
-          <Text style={[styles.title, { color: textPrimary }]}>Clever Tips</Text>
-        </View>
-
-        {/* ---------------- Intro Bubble ---------------- */}
-        <View style={styles.introRow}>
-          {/* Sparkle Icon Badge */}
-          <View style={[styles.sparkleBadge, { backgroundColor: cardBg, borderColor: cardBorder }]}>
-            <Ionicons name="sparkles" size={17} color="#4F46E5" />
-          </View>
-
-          {/* Intro Speech Bubble */}
-          <View style={[styles.introBubble, { backgroundColor: cardBg, borderColor: cardBorder }]}>
-            <Text style={[styles.introText, { color: textPrimary }]}>
-              Here is what I see for your day.
-            </Text>
+          <View style={styles.contentContainer}>
+            <Text style={[styles.title, { color: textPrimary }]}>Clever Tips</Text>
           </View>
         </View>
 
-        {/* ---------------- Proactive Recommendation Cards List ---------------- */}
-        <View style={styles.cardsList}>
-          {suggestions.map((s, index) => {
-            const accentColor = ACCENT_COLORS[s.tone] || (index === 0 ? '#F59E0B' : index === 1 ? '#F59E0B' : '#3B82F6');
-
-            return (
-              <View
-                key={s.id}
-                style={[
-                  styles.recCard,
-                  { backgroundColor: cardBg, borderColor: cardBorder },
-                ]}
-              >
-                {/* Left Colored Accent Bar */}
-                <View style={[styles.cardAccentBar, { backgroundColor: accentColor }]} />
-
-                <View style={styles.cardContent}>
-                  {/* Card Title */}
-                  <Text style={[styles.cardTitle, { color: textPrimary }]}>{s.title}</Text>
-
-                  {/* Card Body */}
-                  <Text style={[styles.cardBody, { color: textSecondary }]}>{s.body}</Text>
-
-                  {/* Action Pill Button */}
-                  {s.action && (
-                    <Pressable
-                      onPress={() => handleAction(s.action)}
-                      style={({ pressed }) => [
-                        styles.actionPill,
-                        { backgroundColor: pillBg },
-                        pressed && { opacity: 0.75 },
-                      ]}
-                    >
-                      <Text style={[styles.actionPillText, { color: pillText }]}>
-                        {s.action.label}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-              </View>
-            );
-          })}
-
-          {/* When user asks questions: render them cleanly in card format */}
-          {answers.map((ans) => {
-            if (ans.role === 'user') {
-              return (
-                <View key={ans.id} style={styles.userBubbleContainer}>
-                  <View style={styles.userBubble}>
-                    <Text style={styles.userBubbleText}>{ans.text}</Text>
-                  </View>
-                </View>
-              );
-            }
-
-            return (
-              <View
-                key={ans.id}
-                style={[
-                  styles.recCard,
-                  { backgroundColor: cardBg, borderColor: cardBorder, marginTop: 6 },
-                ]}
-              >
-                <View style={[styles.cardAccentBar, { backgroundColor: '#4F46E5' }]} />
-                <View style={styles.cardContent}>
-                  <View style={styles.answerHeaderRow}>
-                    <Ionicons name="sparkles" size={14} color="#4F46E5" />
-                    <Text style={styles.answerLabel}>Clever Tips</Text>
-                  </View>
-                  <Text style={[styles.cardBody, { color: textPrimary, marginTop: 4 }]}>
-                    {ans.text}
-                  </Text>
-
-                  {ans.action && (
-                    <Pressable
-                      onPress={() => handleAction(ans.action)}
-                      style={({ pressed }) => [
-                        styles.actionPill,
-                        { backgroundColor: pillBg },
-                        pressed && { opacity: 0.75 },
-                      ]}
-                    >
-                      <Text style={[styles.actionPillText, { color: pillText }]}>
-                        {ans.action.kind === 'addTask' ? 'Add a task' : 'View details'}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-              </View>
-            );
-          })}
-
-          {/* Loading Indicator */}
-          {asking && (
-            <View style={[styles.loadingCard, { backgroundColor: cardBg, borderColor: cardBorder }]}>
-              <ActivityIndicator size="small" color="#4F46E5" />
-              <Text style={[styles.loadingText, { color: textSecondary }]}>
-                Clever Tips is checking your day...
-              </Text>
-            </View>
-          )}
-        </View>
-      </ScrollView>
-
-      {/* ---------------- Pinned Bottom Input & Quick Prompts ---------------- */}
-      <View
-        style={[
-          styles.bottomContainer,
-          {
-            paddingBottom: Math.max(insets.bottom, 14) + 68,
-            backgroundColor: bg,
-          },
-        ]}
-      >
-        {/* Quick Prompts Chips */}
         <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.quickPromptsRow}
+          ref={scrollRef}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingBottom: Math.max(insets.bottom, 12) + 210,
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
         >
-          {QUICK_PROMPTS.map((prompt) => (
-            <Pressable
-              key={prompt}
-              onPress={() => handleSend(prompt)}
-              style={({ pressed }) => [
-                styles.quickPromptChip,
-                { backgroundColor: cardBg, borderColor: cardBorder },
-                pressed && { opacity: 0.8 },
-              ]}
-            >
-              <Text style={[styles.quickPromptText, { color: textPrimary }]}>{prompt}</Text>
-            </Pressable>
-          ))}
+          <View style={styles.contentContainer}>
+            {/* ---------------- Intro Bubble ---------------- */}
+            <View style={styles.introRow}>
+              {/* Sparkle Icon Badge */}
+              <View style={[styles.sparkleBadge, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+                <Ionicons name="sparkles" size={17} color="#4F46E5" />
+              </View>
+
+              {/* Intro Speech Bubble */}
+              <View style={[styles.introBubble, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+                <Text style={[styles.introText, { color: textPrimary }]}>
+                  Here is what I see for your day.
+                </Text>
+              </View>
+            </View>
+
+            {/* ---------------- Proactive Recommendation Cards List ---------------- */}
+            <View style={styles.cardsList}>
+              {uniqueSuggestions.map((s, index) => {
+                const accentColor = ACCENT_COLORS[s.tone] || (index === 0 ? '#F59E0B' : index === 1 ? '#F59E0B' : '#3B82F6');
+
+                return (
+                  <View
+                    key={s.id}
+                    style={[
+                      styles.recCard,
+                      { backgroundColor: cardBg, borderColor: cardBorder },
+                    ]}
+                  >
+                    {/* Left Colored Accent Bar */}
+                    <View style={[styles.cardAccentBar, { backgroundColor: accentColor }]} />
+
+                    <View style={styles.cardContent}>
+                      {/* Card Title */}
+                      <Text style={[styles.cardTitle, { color: textPrimary }]}>{s.title}</Text>
+
+                      {/* Card Body */}
+                      <Text style={[styles.cardBody, { color: textSecondary }]}>{s.body}</Text>
+
+                      {/* Action Pill Button */}
+                      {s.action && (
+                        <Pressable
+                          onPress={() => handleAction(s.action)}
+                          style={({ pressed }) => [
+                            styles.actionPill,
+                            { backgroundColor: pillBg },
+                            pressed && { opacity: 0.75 },
+                          ]}
+                        >
+                          <Text style={[styles.actionPillText, { color: pillText }]}>
+                            {s.action.label}
+                          </Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+
+              {/* When user asks questions: render them cleanly in card format */}
+              {answers.map((ans) => {
+                if (ans.role === 'user') {
+                  return (
+                    <View key={ans.id} style={styles.userBubbleContainer}>
+                      <View style={styles.userBubble}>
+                        <Text style={styles.userBubbleText}>{ans.text}</Text>
+                      </View>
+                    </View>
+                  );
+                }
+
+                return (
+                  <View
+                    key={ans.id}
+                    style={[
+                      styles.recCard,
+                      { backgroundColor: cardBg, borderColor: cardBorder, marginTop: 4 },
+                    ]}
+                  >
+                    <View style={[styles.cardAccentBar, { backgroundColor: '#4F46E5' }]} />
+                    <View style={styles.cardContent}>
+                      <View style={styles.answerHeaderRow}>
+                        <Ionicons name="sparkles" size={14} color="#4F46E5" />
+                        <Text style={styles.answerLabel}>Clever Tips</Text>
+                      </View>
+                      <Text style={[styles.cardBody, { color: textPrimary, marginTop: 4 }]}>
+                        {ans.text}
+                      </Text>
+
+                      {ans.action && (
+                        <Pressable
+                          onPress={() => handleAction(ans.action)}
+                          style={({ pressed }) => [
+                            styles.actionPill,
+                            { backgroundColor: pillBg },
+                            pressed && { opacity: 0.75 },
+                          ]}
+                        >
+                          <Text style={[styles.actionPillText, { color: pillText }]}>
+                            {ans.action.kind === 'addTask' ? 'Add a task' : 'View details'}
+                          </Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+
+              {/* Loading Indicator */}
+              {asking && (
+                <View style={[styles.loadingCard, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+                  <ActivityIndicator size="small" color="#4F46E5" />
+                  <Text style={[styles.loadingText, { color: textSecondary }]}>
+                    Clever Tips is checking your day...
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
         </ScrollView>
 
-        {/* Compact iOS-Style Question Input Box */}
-        <View style={[styles.inputBox, { backgroundColor: cardBg, borderColor: cardBorder }]}>
-          <TextInput
-            ref={inputRef}
-            placeholder="What should I wear? Where are my free hours?"
-            placeholderTextColor={isDark ? '#64748B' : '#94A3B8'}
-            value={askQuery}
-            onChangeText={setAskQuery}
-            onSubmitEditing={() => handleSend()}
-            returnKeyType="send"
-            editable={!asking}
-            style={[styles.textInput, { color: textPrimary }]}
-          />
-          <Pressable
-            onPress={() => handleSend()}
-            disabled={!askQuery.trim() || asking}
-            style={({ pressed }) => [
-              styles.sendButton,
-              {
-                backgroundColor: askQuery.trim() && !asking ? '#6366F1' : '#A5B4FC',
-                opacity: pressed ? 0.85 : 1,
-              },
-            ]}
-          >
-            <Ionicons name="send" size={15} color="#FFFFFF" style={{ marginLeft: 2 }} />
-          </Pressable>
+        {/* ---------------- Pinned Bottom Input & Quick Prompts ---------------- */}
+        <View
+          style={[
+            styles.bottomContainer,
+            {
+              paddingBottom: Math.max(insets.bottom, 12) + 72,
+              backgroundColor: bg,
+            },
+          ]}
+        >
+          <View style={styles.contentContainer}>
+            {/* Quick Prompts Chips */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.quickPromptsRow}
+              style={styles.quickPromptsScroll}
+            >
+              {QUICK_PROMPTS.map((prompt) => (
+                <Pressable
+                  key={prompt}
+                  onPress={() => handleSend(prompt)}
+                  style={({ pressed }) => [
+                    styles.quickPromptChip,
+                    { backgroundColor: cardBg, borderColor: cardBorder },
+                    pressed && { opacity: 0.8 },
+                  ]}
+                >
+                  <Text numberOfLines={1} style={[styles.quickPromptText, { color: textPrimary }]}>
+                    {prompt}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            {/* Compact iOS-Style Question Input Box */}
+            <View style={[styles.inputBox, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+              <TextInput
+                ref={inputRef}
+                placeholder="Ask anything about your day..."
+                placeholderTextColor={isDark ? '#64748B' : '#94A3B8'}
+                value={askQuery}
+                onChangeText={setAskQuery}
+                onSubmitEditing={() => handleSend()}
+                returnKeyType="send"
+                editable={!asking}
+                style={[styles.textInput, { color: textPrimary }]}
+              />
+              <Pressable
+                onPress={() => handleSend()}
+                disabled={!askQuery.trim() || asking}
+                style={({ pressed }) => [
+                  styles.sendButton,
+                  {
+                    backgroundColor: askQuery.trim() && !asking ? '#6366F1' : '#A5B4FC',
+                    opacity: pressed ? 0.85 : 1,
+                  },
+                ]}
+              >
+                <Ionicons name="send" size={15} color="#FFFFFF" style={{ marginLeft: 2 }} />
+              </Pressable>
+            </View>
+          </View>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
@@ -372,19 +394,32 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
+  flex: {
+    flex: 1,
+  },
+  contentContainer: {
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
+    paddingHorizontal: 16,
+  },
   header: {
-    marginBottom: 16,
+    paddingTop: Platform.OS === 'web' ? 12 : 8,
+    paddingBottom: 10,
   },
   title: {
     fontSize: 28,
     fontWeight: '800',
     letterSpacing: -0.5,
   },
+  scrollContent: {
+    paddingTop: 4,
+  },
   introRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 20,
+    marginBottom: 16,
   },
   sparkleBadge: {
     width: 38,
@@ -406,8 +441,8 @@ const styles = StyleSheet.create({
   },
   introBubble: {
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 20,
+    paddingVertical: 12,
+    borderRadius: 18,
     borderTopLeftRadius: 6,
     borderWidth: 1,
     flex: 1,
@@ -423,38 +458,40 @@ const styles = StyleSheet.create({
     }),
   },
   introText: {
-    fontSize: 15,
+    fontSize: 14.5,
     fontWeight: '500',
     letterSpacing: -0.1,
   },
   cardsList: {
-    gap: 14,
+    gap: 12,
   },
   recCard: {
-    borderRadius: 22,
+    borderRadius: 18,
     borderWidth: 1,
     overflow: 'hidden',
     flexDirection: 'row',
+    width: '100%',
     ...Platform.select({
-      web: { boxShadow: '0 4px 20px rgba(0, 0, 0, 0.03)' } as any,
+      web: { boxShadow: '0 2px 10px rgba(0, 0, 0, 0.03)' } as any,
       default: {
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.04,
-        shadowRadius: 10,
+        shadowRadius: 8,
         elevation: 2,
       },
     }),
   },
   cardAccentBar: {
-    width: 4.5,
+    width: 4,
   },
   cardContent: {
     flex: 1,
-    padding: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
   cardTitle: {
-    fontSize: 16.5,
+    fontSize: 16,
     fontWeight: '700',
     letterSpacing: -0.2,
     marginBottom: 6,
@@ -463,16 +500,16 @@ const styles = StyleSheet.create({
     fontSize: 13.5,
     lineHeight: 20,
     fontWeight: '400',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   actionPill: {
-    paddingHorizontal: 16,
-    paddingVertical: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
     borderRadius: 999,
     alignSelf: 'flex-start',
   },
   actionPillText: {
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '600',
   },
   userBubbleContainer: {
@@ -509,8 +546,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    padding: 16,
-    borderRadius: 18,
+    padding: 14,
+    borderRadius: 16,
     borderWidth: 1,
   },
   loadingText: {
@@ -522,31 +559,42 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 16,
     paddingTop: 8,
   },
+  quickPromptsScroll: {
+    marginBottom: 8,
+  },
   quickPromptsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
-    paddingBottom: 8,
+    paddingRight: 8,
   },
   quickPromptChip: {
+    height: 36,
     paddingHorizontal: 14,
-    paddingVertical: 7,
     borderRadius: 999,
     borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    ...Platform.select({
+      web: { whiteSpace: 'nowrap' } as any,
+    }),
   },
   quickPromptText: {
     fontSize: 13,
     fontWeight: '500',
+    lineHeight: 18,
   },
   inputBox: {
+    height: 48,
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: 999,
     borderWidth: 1,
     paddingLeft: 16,
     paddingRight: 6,
-    paddingVertical: Platform.OS === 'web' ? 6 : 4,
     ...Platform.select({
       web: { boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)' } as any,
       default: {
@@ -560,17 +608,19 @@ const styles = StyleSheet.create({
   },
   textInput: {
     flex: 1,
-    fontSize: 14.5,
+    fontSize: 14,
     fontWeight: '400',
-    paddingVertical: 6,
+    paddingVertical: 0,
+    marginRight: 8,
     // @ts-ignore web
     outlineStyle: 'none',
   },
   sendButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
 });
+
