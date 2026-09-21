@@ -130,9 +130,19 @@ export default function SmartSuggestionScreen({ navigation }: any) {
   const handleSend = useCallback(
     async (q?: string) => {
       const question = (q ?? askQuery).trim();
-      if (!question || !planCtx || asking) return;
+      if (!question || asking) return;
       Keyboard.dismiss();
       setAskQuery('');
+
+      if (!planCtx) {
+        setAnswers((prev) => [
+          ...prev,
+          { id: uid('msg'), role: 'user', text: question, timestamp: Date.now() },
+          { id: uid('msg'), role: 'assistant', text: "I can't see the latest weather right now, so I don't want to guess.", timestamp: Date.now() },
+        ]);
+        return;
+      }
+
       setAsking(true);
 
       const userMsg: ChatMessage = {
@@ -151,7 +161,7 @@ export default function SmartSuggestionScreen({ navigation }: any) {
         const assistantMsg: ChatMessage = {
           id: uid('msg'),
           role: 'assistant',
-          text: isError ? "Looks like my brain hit a tiny speed bump. 😅 Try asking again." : result.text,
+          text: isError ? "Looks like I hit a tiny brain freeze. 😅 Try asking again." : result.text,
           timestamp: Date.now(),
           action: result.action,
           chips: result.chips,
@@ -163,7 +173,7 @@ export default function SmartSuggestionScreen({ navigation }: any) {
         const errorMsg: ChatMessage = {
           id: uid('msg'),
           role: 'assistant',
-          text: "Looks like my brain hit a tiny speed bump. 😅 Try asking again.",
+          text: "Looks like I hit a tiny brain freeze. 😅 Try asking again.",
           timestamp: Date.now(),
           isError: true,
           retryQuestion: question,

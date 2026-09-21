@@ -33,7 +33,7 @@ export default async function handler(req: any, res: any) {
   const systemPrompt = buildRecommendationsPrompt(context);
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
@@ -49,7 +49,7 @@ export default async function handler(req: any, res: any) {
             parts: [{ text: 'Analyze the current weather, calendar commitments, and tasks to produce 2-4 contextual recommendation cards.' }],
           },
         ],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 800 },
+        generationConfig: { temperature: 0.4, maxOutputTokens: 1800 },
       }),
       signal: controller.signal,
     });
@@ -62,7 +62,9 @@ export default async function handler(req: any, res: any) {
     }
 
     const geminiJson: any = await geminiRes.json();
-    const rawText = geminiJson?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') ?? '';
+    const parts = geminiJson?.candidates?.[0]?.content?.parts || [];
+    const textParts = parts.filter((p: any) => p.text && !p.thought).map((p: any) => p.text);
+    const rawText = textParts.length > 0 ? textParts.join('') : (parts[parts.length - 1]?.text || '');
 
     const parsed = parseRecommendationsResponse(rawText);
     return res.status(200).json({ recommendations: parsed, live: true });
