@@ -22,6 +22,12 @@ export default function TasksScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [newListName, setNewListName] = useState('');
 
+  React.useEffect(() => {
+    if (state.integrations.googleTasks) {
+      app.syncTasks(false);
+    }
+  }, [state.integrations.googleTasks]);
+
   const todayKey = dateKey(new Date());
   const window = weather ? bestOutdoorWindow(weather, todayKey) : null;
 
@@ -80,11 +86,10 @@ export default function TasksScreen({ navigation }: any) {
         contentContainerStyle={{ paddingBottom: 130, paddingHorizontal: Space.lg }}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
+            refreshing={refreshing || app.tasksLoading}
             onRefresh={async () => {
               setRefreshing(true);
-              app.setIntegrations({ lastSyncTasks: Date.now() });
-              await new Promise((r) => setTimeout(r, 700));
+              await app.syncTasks(true);
               setRefreshing(false);
             }}
             tintColor={theme.accent}

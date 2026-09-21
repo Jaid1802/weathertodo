@@ -125,7 +125,6 @@ export async function exchangeGoogleCode(
   codeVerifier?: string,
   redirectUri?: string
 ): Promise<{ access_token: string; expires_in: number; refresh_token?: string; user?: GoogleUser }> {
-  console.log('Google token exchange redirect_uri:', redirectUri);
   const baseUrl = getBackendBaseUrl();
   let res = await fetch(`${baseUrl}/api/auth/google/callback`, {
     method: 'POST',

@@ -24,6 +24,12 @@ export default function CalendarScreen({ navigation }: any) {
   const [showCals, setShowCals] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  React.useEffect(() => {
+    if (state.integrations.googleCalendar) {
+      app.syncCalendar(false);
+    }
+  }, [state.integrations.googleCalendar]);
+
   const visibleCals = useMemo(() => new Set(state.calendars.filter((c) => c.visible).map((c) => c.id)), [state.calendars]);
   const events = useMemo(() => state.events.filter((e) => visibleCals.has(e.calendarId)), [state.events, visibleCals]);
 
@@ -108,11 +114,10 @@ export default function CalendarScreen({ navigation }: any) {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
+            refreshing={refreshing || app.calendarLoading}
             onRefresh={async () => {
               setRefreshing(true);
-              app.setIntegrations({ lastSyncCalendar: Date.now() });
-              await new Promise((r) => setTimeout(r, 700));
+              await app.syncCalendar(true);
               setRefreshing(false);
             }}
             tintColor={theme.accent}

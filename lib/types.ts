@@ -144,6 +144,8 @@ export interface ChatMessage {
   actions?: CleverAction[];
   actionDone?: boolean;
   sourcesUsed?: string[];
+  isError?: boolean;
+  retryQuestion?: string;
 }
 
 export interface IntegrationState {

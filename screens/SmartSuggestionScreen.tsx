@@ -1,10 +1,11 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,7 +16,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useApp } from '../lib/store';
-import { PlanContext, Suggestion, CleverAction, askGemini, generateSuggestions } from '../lib/gemini';
+import { PlanContext, Suggestion, CleverAction, askGemini, generateSuggestions, fetchSmartRecommendations } from '../lib/gemini';
 import { ChatMessage } from '../lib/types';
 import { dateKey, uid } from '../lib/utils';
 
@@ -37,11 +38,12 @@ const QUICK_PROMPTS = [
 
 export default function SmartSuggestionScreen({ navigation }: any) {
   const app = useApp();
-  const { state, weather, activePlace, scheme } = app;
+  const { state, theme, weather, activePlace, scheme } = app;
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const settings = state.settings;
   const isDark = scheme === 'dark';
+  const [refreshing, setRefreshing] = useState(false);
 
   const todayKey = dateKey(new Date());
 
@@ -74,19 +76,49 @@ export default function SmartSuggestionScreen({ navigation }: any) {
     };
   }, [weather, activePlace, todayEvents, state.events, todayTasks, state.tasks, state.reminders, state.integrations, settings, state.user]);
 
-  // Proactive recommendations generated from user's real weather, calendar, and tasks
-  const suggestions: Suggestion[] = useMemo(() => (planCtx ? generateSuggestions(planCtx) : []), [planCtx]);
+  // Contextual smart recommendations state (populated by Gemini, fallback to deterministic)
+  const [smartRecommendations, setSmartRecommendations] = useState<Suggestion[] | null>(null);
+
+  // Background refresh of Google data if connected
+  useEffect(() => {
+    if (state.integrations.googleCalendar || state.integrations.googleTasks) {
+      app.syncGoogleData().catch(() => {});
+    }
+  }, []);
+
+  // Fetch real Gemini recommendations whenever plan context is available/updated
+  useEffect(() => {
+    if (!planCtx) return;
+    let active = true;
+    fetchSmartRecommendations(planCtx)
+      .then((recs) => {
+        if (active && recs && recs.length > 0) {
+          setSmartRecommendations(recs);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [planCtx]);
+
+  const rawSuggestions: Suggestion[] = useMemo(() => {
+    if (smartRecommendations && smartRecommendations.length > 0) {
+      return smartRecommendations;
+    }
+    return planCtx ? generateSuggestions(planCtx) : [];
+  }, [smartRecommendations, planCtx]);
 
   // Deduplicate recommendations so the exact same card is never displayed multiple times
   const uniqueSuggestions = useMemo(() => {
     const seen = new Set<string>();
-    return suggestions.filter((s) => {
+    return rawSuggestions.filter((s) => {
       const key = `${s.title.trim()}|${s.body.trim()}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-  }, [suggestions]);
+  }, [rawSuggestions]);
 
   // Conversational questions state
   const [askQuery, setAskQuery] = useState('');
@@ -115,21 +147,26 @@ export default function SmartSuggestionScreen({ navigation }: any) {
 
       try {
         const result = await askGemini(question, planCtx, newHistory);
+        const isError = (result as any).isError || (result as any).error;
         const assistantMsg: ChatMessage = {
           id: uid('msg'),
           role: 'assistant',
-          text: result.text,
+          text: isError ? "Looks like my brain hit a tiny speed bump. 😅 Try asking again." : result.text,
           timestamp: Date.now(),
           action: result.action,
           chips: result.chips,
+          isError,
+          retryQuestion: isError ? question : undefined,
         };
         setAnswers((prev) => [...prev, assistantMsg]);
       } catch {
         const errorMsg: ChatMessage = {
           id: uid('msg'),
           role: 'assistant',
-          text: "I couldn't complete that request right now. Please try asking again in a moment.",
+          text: "Looks like my brain hit a tiny speed bump. 😅 Try asking again.",
           timestamp: Date.now(),
+          isError: true,
+          retryQuestion: question,
         };
         setAnswers((prev) => [...prev, errorMsg]);
       } finally {
@@ -199,6 +236,24 @@ export default function SmartSuggestionScreen({ navigation }: any) {
             },
           ]}
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={async () => {
+                setRefreshing(true);
+                await Promise.allSettled([
+                  app.refreshWeather(true),
+                  app.syncGoogleData(),
+                ]);
+                if (planCtx) {
+                  const recs = await fetchSmartRecommendations(planCtx);
+                  if (recs && recs.length > 0) setSmartRecommendations(recs);
+                }
+                setRefreshing(false);
+              }}
+              tintColor={theme.accent}
+            />
+          }
         >
           <View style={styles.contentContainer}>
             {/* ---------------- Intro Bubble ---------------- */}
@@ -263,7 +318,7 @@ export default function SmartSuggestionScreen({ navigation }: any) {
               {answers.map((ans) => {
                 if (ans.role === 'user') {
                   return (
-                    <View key={ans.id} style={styles.userBubbleContainer}>
+                    <View key={ans.id} style={styles.userBubbleRow}>
                       <View style={styles.userBubble}>
                         <Text style={styles.userBubbleText}>{ans.text}</Text>
                       </View>
@@ -279,17 +334,33 @@ export default function SmartSuggestionScreen({ navigation }: any) {
                       { backgroundColor: cardBg, borderColor: cardBorder, marginTop: 4 },
                     ]}
                   >
-                    <View style={[styles.cardAccentBar, { backgroundColor: '#4F46E5' }]} />
+                    <View style={[styles.cardAccentBar, { backgroundColor: ans.isError ? '#EF4444' : '#4F46E5' }]} />
                     <View style={styles.cardContent}>
                       <View style={styles.answerHeaderRow}>
-                        <Ionicons name="sparkles" size={14} color="#4F46E5" />
-                        <Text style={styles.answerLabel}>Clever Tips</Text>
+                        <Ionicons name={ans.isError ? 'alert-circle-outline' : 'sparkles'} size={14} color={ans.isError ? '#EF4444' : '#4F46E5'} />
+                        <Text style={[styles.answerLabel, ans.isError && { color: '#EF4444' }]}>Clever Tips</Text>
                       </View>
                       <Text style={[styles.cardBody, { color: textPrimary, marginTop: 4 }]}>
                         {ans.text}
                       </Text>
 
-                      {ans.action && (
+                      {ans.isError && ans.retryQuestion && (
+                        <Pressable
+                          onPress={() => handleSend(ans.retryQuestion)}
+                          style={({ pressed }) => [
+                            styles.actionPill,
+                            { backgroundColor: isDark ? '#334155' : '#EEF2FF', marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
+                            pressed && { opacity: 0.75 },
+                          ]}
+                        >
+                          <Ionicons name="refresh" size={13} color="#4F46E5" />
+                          <Text style={[styles.actionPillText, { color: '#4F46E5' }]}>
+                            Retry
+                          </Text>
+                        </Pressable>
+                      )}
+
+                      {ans.action && !ans.isError && (
                         <Pressable
                           onPress={() => handleAction(ans.action)}
                           style={({ pressed }) => [
@@ -512,22 +583,43 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     fontWeight: '600',
   },
-  userBubbleContainer: {
-    alignSelf: 'flex-end',
-    maxWidth: '85%',
+  userBubbleRow: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
     marginVertical: 4,
   },
   userBubble: {
     backgroundColor: '#6366F1',
+    maxWidth: '80%',
+    width: 'auto',
     borderRadius: 18,
     borderBottomRightRadius: 4,
     paddingHorizontal: 16,
     paddingVertical: 10,
+    alignSelf: 'flex-end',
+    ...Platform.select({
+      web: {
+        width: 'fit-content' as any,
+        maxWidth: '80%',
+        boxSizing: 'border-box' as any,
+      },
+    }),
   },
   userBubbleText: {
     color: '#FFFFFF',
     fontSize: 14.5,
+    lineHeight: 21,
     fontWeight: '500',
+    textAlign: 'left',
+    flexShrink: 1,
+    ...Platform.select({
+      web: {
+        wordBreak: 'break-word' as any,
+        overflowWrap: 'anywhere' as any,
+        whiteSpace: 'normal' as any,
+      },
+    }),
   },
   answerHeaderRow: {
     flexDirection: 'row',

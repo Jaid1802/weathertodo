@@ -56,10 +56,7 @@ export default function IntegrationsScreen({ navigation }: any) {
     process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
     process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
     process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
-    '767576613120-nfakoenf0n4d1sihfok0r3pd00tor2r8.apps.googleusercontent.com';
-
-  console.log('Google OAuth redirect URI:', redirectUri);
-  console.log('Google OAuth client ID:', googleClientId);
+    '';
 
 
   const [request, response, promptAsync] = AuthSession.useAuthRequest(

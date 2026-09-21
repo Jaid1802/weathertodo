@@ -25,7 +25,7 @@ import {
   uvLabel,
 } from '../lib/weather';
 import { resolveWeatherTheme } from '../lib/weatherTheme';
-import { PlanContext, Suggestion, generateSuggestions } from '../lib/gemini';
+import { PlanContext, Suggestion, generateSuggestions, fetchSmartRecommendations } from '../lib/gemini';
 import { dateKey } from '../lib/utils';
 
 const KIND_COLOR: Record<string, string> = {
@@ -109,13 +109,43 @@ export default function HomeScreen({ navigation }: any) {
     };
   }, [weather, activePlace, todayEvents, state.events, todayTasks, state.tasks, state.reminders, state.integrations, settings, state.user]);
 
-  const suggestions: Suggestion[] = useMemo(() => (planCtx ? generateSuggestions(planCtx) : []), [planCtx]);
+  const [smartRecommendations, setSmartRecommendations] = useState<Suggestion[] | null>(null);
+
+  // Fetch live contextual recommendations via Gemini
+  React.useEffect(() => {
+    if (!planCtx) return;
+    let active = true;
+    fetchSmartRecommendations(planCtx)
+      .then((recs) => {
+        if (active && recs && recs.length > 0) {
+          setSmartRecommendations(recs);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [planCtx]);
+
+  const suggestions: Suggestion[] = useMemo(() => {
+    if (smartRecommendations && smartRecommendations.length > 0) {
+      return smartRecommendations;
+    }
+    return planCtx ? generateSuggestions(planCtx) : [];
+  }, [smartRecommendations, planCtx]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await refreshWeather(true);
+    await Promise.allSettled([
+      refreshWeather(true),
+      app.syncGoogleData(),
+    ]);
+    if (planCtx) {
+      const recs = await fetchSmartRecommendations(planCtx);
+      if (recs && recs.length > 0) setSmartRecommendations(recs);
+    }
     setRefreshing(false);
-  }, [refreshWeather]);
+  }, [refreshWeather, app, planCtx]);
 
   // Format greeting matching Reference 2 ("Good morning, Zaid")
   const greetingTime = useMemo(() => {
@@ -167,8 +197,8 @@ export default function HomeScreen({ navigation }: any) {
   const tipText =
     primaryTip?.body ||
     (todayEvents.length > 0 && cur && cur.code >= 51
-      ? 'Rain is expected today during your scheduled commitments. Consider carrying an umbrella.'
-      : 'Conditions are favorable today. A great window to balance your schedule with outdoor moments.');
+      ? "Rain says it's joining your scheduled commitments uninvited today. ☔ Pack an umbrella so Future You stays dry."
+      : "Conditions look great outside today. ☀️ Pick an anchor task, take an outdoor break, and stay ahead of the chaos.");
 
   const illustrationSize = isWide ? 120 : 105;
 

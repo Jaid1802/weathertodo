@@ -90,9 +90,10 @@ function mapGoogleEventToCalEvent(item: any, calendarId: string): CalEvent | nul
     dateStr = dateKey(new Date());
   }
 
-  // Infer outdoor status based on location/title
-  const text = `${item.summary || ''} ${item.location || ''}`.toLowerCase();
-  const isOutdoor = /park|hike|run|walk|jog|beach|garden|outdoor|court|trail|field/i.test(text);
+  // Infer outdoor status based on location/title/description
+  const text = `${item.summary || ''} ${item.location || ''} ${item.description || ''}`.toLowerCase();
+  const isOutdoor = /park|hike|run|walk|jog|beach|garden|outdoor|court|trail|field|pitch|stadium|outside/i.test(text);
+  const isMeeting = /meeting|sync|standup|1:1|call|interview|review|presentation|demo|webinar/i.test(text) || Boolean(item.attendees && item.attendees.length > 1);
 
   return {
     id: `gcal_${item.id}`,
@@ -104,10 +105,11 @@ function mapGoogleEventToCalEvent(item: any, calendarId: string): CalEvent | nul
     allDay: isAllDay,
     location: item.location || undefined,
     isOutdoor,
-    kind: 'personal',
+    kind: isOutdoor ? 'personal' : isMeeting ? 'meeting' : 'personal',
     calendarId,
     source: 'google',
     attendees: item.attendees?.map((a: any) => a.displayName || a.email).filter(Boolean),
+    status: item.status || 'confirmed',
   };
 }
 
@@ -162,6 +164,68 @@ export async function createGoogleEvent(calendarId: string, event: Partial<CalEv
   return await res.json();
 }
 
+export async function updateGoogleEvent(
+  calendarId: string,
+  eventId: string,
+  event: Partial<CalEvent>
+): Promise<{ success: boolean; error?: string; permissionDenied?: boolean }> {
+  const cleanCalId = calendarId.replace(/^gcal_/, '');
+  const cleanEventId = eventId.replace(/^gcal_/, '');
+
+  const body: any = {};
+  if (event.title !== undefined) body.summary = event.title;
+  if (event.notes !== undefined) body.description = event.notes;
+  if (event.location !== undefined) body.location = event.location;
+
+  if (event.allDay !== undefined) {
+    if (event.allDay) {
+      if (event.date) {
+        body.start = { date: event.date };
+        body.end = { date: event.date };
+      }
+    } else if (event.date && event.startMinutes !== undefined && event.endMinutes !== undefined) {
+      const [y, m, d] = event.date.split('-').map(Number);
+      const start = new Date(y, m - 1, d, Math.floor(event.startMinutes / 60), event.startMinutes % 60);
+      const end = new Date(y, m - 1, d, Math.floor(event.endMinutes / 60), event.endMinutes % 60);
+      body.start = { dateTime: start.toISOString() };
+      body.end = { dateTime: end.toISOString() };
+    }
+  } else if (event.date && event.startMinutes !== undefined && event.endMinutes !== undefined) {
+    const [y, m, d] = event.date.split('-').map(Number);
+    const start = new Date(y, m - 1, d, Math.floor(event.startMinutes / 60), event.startMinutes % 60);
+    const end = new Date(y, m - 1, d, Math.floor(event.endMinutes / 60), event.endMinutes % 60);
+    body.start = { dateTime: start.toISOString() };
+    body.end = { dateTime: end.toISOString() };
+  }
+
+  try {
+    const res = await googleFetch(`${CALENDAR_API_BASE}/calendars/${encodeURIComponent(cleanCalId)}/events/${encodeURIComponent(cleanEventId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      return {
+        success: false,
+        permissionDenied: true,
+        error: 'Your calendar is connected for viewing, but editing permission is required to move this event.',
+      };
+    }
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      return { success: false, error: `Failed to update Google event (${res.status}): ${errText}` };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Error updating Google Calendar event',
+    };
+  }
+}
+
 /* ========================================================================== */
 /*                             GOOGLE TASKS API                               */
 /* ========================================================================== */
@@ -191,8 +255,16 @@ function mapGoogleTaskToTask(item: any, listId: string): Task | null {
   if (!item.id || item.deleted) return null;
 
   let dueDate: string | undefined = undefined;
+  let dueMinutes: number | undefined = undefined;
   if (item.due) {
-    dueDate = dateKey(new Date(item.due));
+    const d = new Date(item.due);
+    dueDate = dateKey(d);
+    // If the due timestamp has an explicit non-midnight time
+    const hours = d.getHours();
+    const minutes = d.getMinutes();
+    if (hours !== 0 || minutes !== 0) {
+      dueMinutes = hours * 60 + minutes;
+    }
   }
 
   const isDone = item.status === 'completed';
@@ -201,6 +273,17 @@ function mapGoogleTaskToTask(item: any, listId: string): Task | null {
 
   const isOutdoor = /outside|park|walk|run|garden|lawn|outdoor|market|grocer/i.test(`${item.title || ''} ${item.notes || ''}`);
 
+  // Detect priority from title or notes if present
+  let priority: Task['priority'] = 'normal';
+  const combinedText = `${item.title || ''} ${item.notes || ''}`.toLowerCase();
+  if (combinedText.includes('urgent') || combinedText.includes('p1') || combinedText.includes('!!!')) {
+    priority = 'urgent';
+  } else if (combinedText.includes('high') || combinedText.includes('p2') || combinedText.includes('!!')) {
+    priority = 'high';
+  } else if (combinedText.includes('low') || combinedText.includes('p4')) {
+    priority = 'low';
+  }
+
   return {
     id: `gtask_${item.id}`,
     title: item.title || 'Untitled Task',
@@ -208,8 +291,8 @@ function mapGoogleTaskToTask(item: any, listId: string): Task | null {
     done: isDone,
     completedAt,
     dueDate,
-    dueMinutes: undefined,
-    priority: 'normal',
+    dueMinutes,
+    priority,
     context: isOutdoor ? 'outdoor' : 'anywhere',
     listId,
     source: 'google',
@@ -275,16 +358,13 @@ export async function updateGoogleTaskStatus(
 }
 
 /* ========================================================================== */
-/*                               FULL SYNC                                    */
+/*                               SYNC FUNCTIONS                               */
 /* ========================================================================== */
 
-export async function fetchAllGoogleData(): Promise<{
+export async function fetchGoogleCalendarData(): Promise<{
   calendars: CalendarInfo[];
   events: CalEvent[];
-  lists: TaskList[];
-  tasks: Task[];
 }> {
-  // 1. Fetch Calendars & Events
   const calendars = await listGoogleCalendars();
   let events: CalEvent[] = [];
 
@@ -296,8 +376,13 @@ export async function fetchAllGoogleData(): Promise<{
       console.warn(`Error fetching events for calendar ${cal.id}:`, e);
     }
   }
+  return { calendars, events };
+}
 
-  // 2. Fetch Task Lists & Tasks
+export async function fetchGoogleTasksData(): Promise<{
+  lists: TaskList[];
+  tasks: Task[];
+}> {
   const lists = await listGoogleTaskLists();
   let tasks: Task[] = [];
 
@@ -309,6 +394,25 @@ export async function fetchAllGoogleData(): Promise<{
       console.warn(`Error fetching tasks for list ${l.id}:`, e);
     }
   }
+  return { lists, tasks };
+}
+
+export async function fetchAllGoogleData(): Promise<{
+  calendars: CalendarInfo[];
+  events: CalEvent[];
+  lists: TaskList[];
+  tasks: Task[];
+}> {
+  const [calResult, taskResult] = await Promise.allSettled([
+    fetchGoogleCalendarData(),
+    fetchGoogleTasksData(),
+  ]);
+
+  const calendars = calResult.status === 'fulfilled' ? calResult.value.calendars : [];
+  const events = calResult.status === 'fulfilled' ? calResult.value.events : [];
+  const lists = taskResult.status === 'fulfilled' ? taskResult.value.lists : [];
+  const tasks = taskResult.status === 'fulfilled' ? taskResult.value.tasks : [];
 
   return { calendars, events, lists, tasks };
 }
+

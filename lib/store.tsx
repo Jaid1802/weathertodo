@@ -9,7 +9,12 @@ import { DEFAULT_PLACES, Place, WeatherBundle, fetchWeather, synthesize, reverse
 import { AppTheme, ColorScheme, getTheme } from './theme';
 import { dateKey, uid } from './utils';
 import { getValidAccessToken, getStoredGoogleUser, disconnectGoogleAccount } from './googleAuth';
-import { fetchAllGoogleData } from './googleApi';
+import {
+  fetchAllGoogleData,
+  fetchGoogleCalendarData,
+  fetchGoogleTasksData,
+  updateGoogleTaskStatus,
+} from './googleApi';
 
 const KEY = '@weatherwhattodo/v1';
 
@@ -113,6 +118,8 @@ export interface Ctx {
   googleConnected: boolean;
   googleUser: { email?: string; name?: string; picture?: string } | null;
   loadingWeather: boolean;
+  calendarLoading: boolean;
+  tasksLoading: boolean;
   // auth
   signIn: (email: string, name?: string, provider?: UserProfile['provider']) => void;
   signOut: () => void;
@@ -145,6 +152,8 @@ export interface Ctx {
   reorderPlace: (id: string, dir: -1 | 1) => void;
   // integrations
   setIntegrations: (p: Partial<IntegrationState>) => void;
+  syncCalendar: (force?: boolean) => Promise<void>;
+  syncTasks: (force?: boolean) => Promise<void>;
   syncGoogleData: (payload?: {
     calendars?: CalendarInfo[];
     events?: CalEvent[];
@@ -181,6 +190,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [weatherByPlace, setWeatherByPlace] = useState<Record<string, WeatherBundle>>({});
   const [weatherLoading, setWeatherLoading] = useState(true);
   const [weatherError, setWeatherError] = useState<string | null>(null);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(false);
   const hydrated = useRef(false);
 
   useEffect(() => {
@@ -300,6 +311,67 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshWeather();
   }, [ready, state.activePlaceId, refreshWeather]);
 
+  // Auto-sync Google Calendar & Tasks when connected and app mounts or returns to active
+  useEffect(() => {
+    if (!ready || typeof window === 'undefined') return;
+    const isGoogleConnected = Boolean(state.integrations.googleCalendar || state.integrations.googleTasks);
+    if (!isGoogleConnected) return;
+
+    const checkAndSync = async () => {
+      const token = await getValidAccessToken();
+      if (!token) return;
+      const now = Date.now();
+      const calStale = !state.integrations.lastSyncCalendar || (now - state.integrations.lastSyncCalendar > 60000);
+      const taskStale = !state.integrations.lastSyncTasks || (now - state.integrations.lastSyncTasks > 60000);
+
+      if (calStale || taskStale) {
+        try {
+          const data = await fetchAllGoogleData();
+          const user = await getStoredGoogleUser();
+          dispatch({
+            type: 'patch',
+            payload: {
+              calendars: [
+                ...state.calendars.filter((c) => c.source !== 'google' && c.id !== 'cal_primary'),
+                ...data.calendars,
+              ],
+              events: [
+                ...state.events.filter((e) => e.source !== 'google' && !e.id.startsWith('e_')),
+                ...data.events,
+              ],
+              lists: [
+                ...state.lists.filter((l) => l.source !== 'google' && l.id !== 'inbox'),
+                ...data.lists,
+              ],
+              tasks: [
+                ...state.tasks.filter((t) => t.source !== 'google' && !t.id.startsWith('t_')),
+                ...data.tasks,
+              ],
+              integrations: {
+                ...state.integrations,
+                googleCalendar: true,
+                googleTasks: true,
+                account: user?.email || state.integrations.account,
+                lastSyncCalendar: now,
+                lastSyncTasks: now,
+              },
+            },
+          });
+        } catch {}
+      }
+    };
+
+    checkAndSync();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkAndSync();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [ready, state.integrations.googleCalendar, state.integrations.googleTasks]);
+
   const scheme: ColorScheme = state.settings.themeMode === 'system'
     ? (systemDark ? 'dark' : 'light')
     : state.settings.themeMode;
@@ -353,6 +425,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           stats: { ...state.stats, completedTotal: state.stats.completedTotal + (nowDone ? 1 : -1) },
         },
       });
+      // Synchronize completion status with Google Tasks API if it is a Google task
+      if (t && t.source === 'google' && t.listId) {
+        updateGoogleTaskStatus(t.listId, t.id, nowDone).catch((err) => {
+          console.warn('Failed to sync task status to Google Tasks:', err);
+        });
+      }
     },
     deleteTask: (id) => dispatch({ type: 'patch', payload: { tasks: state.tasks.filter((t) => t.id !== id) } }),
     addList: (name, color, icon) => dispatch({ type: 'patch', payload: { lists: [...state.lists, { id: uid('l'), name, color, icon, source: 'local' }] } }),
@@ -383,6 +461,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     googleConnected: Boolean(state.integrations.googleCalendar || state.integrations.googleTasks),
     googleUser: state.integrations.account ? { email: state.integrations.account } : null,
     loadingWeather: weatherLoading,
+    calendarLoading,
+    tasksLoading,
     updateSettings: (p) => dispatch({ type: 'settings', payload: p }),
     addChatMessage: (m) => dispatch({ type: 'patch', payload: { chat: [...state.chat, m] } }),
     addPlace: (p) => {
@@ -418,10 +498,84 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     setIntegrations: (p: Partial<IntegrationState>) =>
       dispatch({ type: 'patch', payload: { integrations: { ...state.integrations, ...p } } }),
+    syncCalendar: async (force = false) => {
+      try {
+        const token = await getValidAccessToken();
+        if (!token) return;
+        const now = Date.now();
+        if (!force && state.integrations.lastSyncCalendar && now - state.integrations.lastSyncCalendar < 45000) {
+          return;
+        }
+        setCalendarLoading(true);
+        const { calendars, events } = await fetchGoogleCalendarData();
+        const user = await getStoredGoogleUser();
+        dispatch({
+          type: 'patch',
+          payload: {
+            calendars: [
+              ...state.calendars.filter((c) => c.source !== 'google' && c.id !== 'cal_primary'),
+              ...calendars,
+            ],
+            events: [
+              ...state.events.filter((e) => e.source !== 'google' && !e.id.startsWith('e_')),
+              ...events,
+            ],
+            integrations: {
+              ...state.integrations,
+              googleCalendar: true,
+              account: user?.email || state.integrations.account,
+              lastSyncCalendar: now,
+            },
+          },
+        });
+      } catch (err) {
+        console.warn('Calendar sync error:', err);
+      } finally {
+        setCalendarLoading(false);
+      }
+    },
+    syncTasks: async (force = false) => {
+      try {
+        const token = await getValidAccessToken();
+        if (!token) return;
+        const now = Date.now();
+        if (!force && state.integrations.lastSyncTasks && now - state.integrations.lastSyncTasks < 45000) {
+          return;
+        }
+        setTasksLoading(true);
+        const { lists, tasks } = await fetchGoogleTasksData();
+        const user = await getStoredGoogleUser();
+        dispatch({
+          type: 'patch',
+          payload: {
+            lists: [
+              ...state.lists.filter((l) => l.source !== 'google' && l.id !== 'inbox'),
+              ...lists,
+            ],
+            tasks: [
+              ...state.tasks.filter((t) => t.source !== 'google' && !t.id.startsWith('t_')),
+              ...tasks,
+            ],
+            integrations: {
+              ...state.integrations,
+              googleTasks: true,
+              account: user?.email || state.integrations.account,
+              lastSyncTasks: now,
+            },
+          },
+        });
+      } catch (err) {
+        console.warn('Tasks sync error:', err);
+      } finally {
+        setTasksLoading(false);
+      }
+    },
     syncGoogleData: async (payload) => {
       try {
         const user = await getStoredGoogleUser();
         const now = Date.now();
+        setCalendarLoading(true);
+        setTasksLoading(true);
         const data = payload
           ? {
               calendars: payload.calendars ?? [],
@@ -435,16 +589,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           type: 'patch',
           payload: {
             ...(payload?.calendars !== undefined || !payload
-              ? { calendars: [...state.calendars.filter((c) => c.source !== 'google'), ...data.calendars] }
+              ? { calendars: [...state.calendars.filter((c) => c.source !== 'google' && c.id !== 'cal_primary'), ...data.calendars] }
               : {}),
             ...(payload?.events !== undefined || !payload
-              ? { events: [...state.events.filter((e) => e.source !== 'google'), ...data.events] }
+              ? { events: [...state.events.filter((e) => e.source !== 'google' && !e.id.startsWith('e_')), ...data.events] }
               : {}),
             ...(payload?.lists !== undefined || !payload
-              ? { lists: [...state.lists.filter((l) => l.source !== 'google'), ...data.lists] }
+              ? { lists: [...state.lists.filter((l) => l.source !== 'google' && l.id !== 'inbox'), ...data.lists] }
               : {}),
             ...(payload?.tasks !== undefined || !payload
-              ? { tasks: [...state.tasks.filter((t) => t.source !== 'google'), ...data.tasks] }
+              ? { tasks: [...state.tasks.filter((t) => t.source !== 'google' && !t.id.startsWith('t_')), ...data.tasks] }
               : {}),
             integrations: {
               ...state.integrations,
@@ -458,6 +612,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
       } catch (err) {
         console.warn('Sync error:', err);
+      } finally {
+        setCalendarLoading(false);
+        setTasksLoading(false);
       }
     },
     disconnectGoogle: async () => {
@@ -514,7 +671,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       dispatch({ type: 'hydrate', payload: defaultState() });
     },
-  }), [ready, state, theme, scheme, fontScale, weather, weatherLoading, weatherError, refreshWeather, activePlace, weatherByPlace, loadPlaceWeather]);
+  }), [ready, state, theme, scheme, fontScale, weather, weatherLoading, weatherError, calendarLoading, tasksLoading, refreshWeather, activePlace, weatherByPlace, loadPlaceWeather]);
 
   return <AppCtx.Provider value={api}>{children}</AppCtx.Provider>;
 }
