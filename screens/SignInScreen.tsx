@@ -3,22 +3,15 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as WebBrowser from 'expo-web-browser';
-import * as AuthSession from 'expo-auth-session';
 import WeatherBackground from '../components/WeatherBackground';
 import { Btn, GlassCard, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
 import { Radius, Space, getSky } from '../lib/theme';
 import {
-  isSupabaseConfigured,
   signInWithSupabaseGoogle,
   signInWithEmailPassword,
   signUpWithEmailPassword,
 } from '../lib/supabase';
-import {
-  googleDiscovery,
-  GOOGLE_SCOPES,
-  exchangeGoogleCode,
-} from '../lib/googleAuth';
 
 // Complete auth session if returning from web browser
 WebBrowser.maybeCompleteAuthSession();
@@ -38,39 +31,6 @@ export default function SignInScreen() {
   const onSky = sky.onSky;
   const onSkyMuted = sky.onSkyMuted;
 
-  // Direct Google OAuth configuration (used if Supabase is not configured or for direct Google provider)
-  const redirectUri =
-    process.env.EXPO_PUBLIC_GOOGLE_REDIRECT_URI ||
-    process.env.GOOGLE_REDIRECT_URI ||
-    process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI ||
-    (Platform.OS === 'web' && typeof window !== 'undefined'
-      ? `${window.location.origin}/auth/google/callback`
-      : AuthSession.makeRedirectUri({
-          scheme: 'weatherwhattodo',
-          path: 'auth/google/callback',
-        }));
-
-  const googleClientId =
-    process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
-    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
-    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
-    '';
-
-  const [request, , promptAsync] = AuthSession.useAuthRequest(
-    {
-      clientId: googleClientId,
-      scopes: GOOGLE_SCOPES,
-      redirectUri,
-      responseType: AuthSession.ResponseType.Code,
-      usePKCE: true,
-      extraParams: {
-        access_type: 'offline',
-        prompt: 'consent',
-      },
-    },
-    googleDiscovery
-  );
-
   // Check URL parameters for OAuth error upon mount
   useEffect(() => {
     if (typeof window !== 'undefined' && window.location) {
@@ -85,7 +45,7 @@ export default function SignInScreen() {
           if (err.toLowerCase().includes('cancel') || err.toLowerCase().includes('closed')) {
             setError('Google login cancelled.');
           } else {
-            setError('Google sign-in failed. Please try again.');
+            setError('Google sign-in is currently unavailable. Please try again.');
           }
           // Clean error parameter from URL
           url.searchParams.delete('error');
@@ -128,45 +88,43 @@ export default function SignInScreen() {
     setBusy(true);
 
     try {
-      if (isSupabaseConfigured()) {
-        if (mode === 'up') {
-          const { data, error: supaErr } = await signUpWithEmailPassword(
-            email.trim().toLowerCase(),
-            password,
-            name.trim()
-          );
-          if (supaErr) {
-            setError(supaErr.message || 'Failed to create account.');
-            setBusy(false);
-            return;
-          }
-          if (data?.user) {
-            app.signIn(data.user.email || email, name.trim(), 'email', data.user.id);
-          }
-        } else {
-          const { data, error: supaErr } = await signInWithEmailPassword(
-            email.trim().toLowerCase(),
-            password
-          );
-          if (supaErr) {
-            setError(supaErr.message || 'Invalid email or password.');
-            setBusy(false);
-            return;
-          }
-          if (data?.user) {
-            const userName =
-              data.user.user_metadata?.name ||
-              data.user.user_metadata?.full_name ||
-              email.split('@')[0];
-            app.signIn(data.user.email || email, userName, 'email', data.user.id);
-          }
+      if (mode === 'up') {
+        const { data, error: supaErr } = await signUpWithEmailPassword(
+          email.trim().toLowerCase(),
+          password,
+          name.trim()
+        );
+        if (supaErr) {
+          setError(supaErr.message || 'Failed to create account.');
+          setBusy(false);
+          return;
+        }
+        if (data?.user) {
+          app.signIn(data.user.email || email, name.trim(), 'email', data.user.id);
         }
       } else {
-        await new Promise((r) => setTimeout(r, 600));
-        app.signIn(email.trim().toLowerCase(), mode === 'up' ? name.trim() : undefined, 'email');
+        const { data, error: supaErr } = await signInWithEmailPassword(
+          email.trim().toLowerCase(),
+          password
+        );
+        if (supaErr) {
+          setError(supaErr.message || 'Invalid email or password.');
+          setBusy(false);
+          return;
+        }
+        if (data?.user) {
+          const userName =
+            data.user.user_metadata?.name ||
+            data.user.user_metadata?.full_name ||
+            email.split('@')[0];
+          app.signIn(data.user.email || email, userName, 'email', data.user.id);
+        }
       }
     } catch (err: any) {
-      setError(err?.message || 'Authentication error.');
+      console.warn('Sign-in error, using local fallback:', err?.message || err);
+      // Fallback to local session
+      await new Promise((r) => setTimeout(r, 600));
+      app.signIn(email.trim().toLowerCase(), mode === 'up' ? name.trim() : undefined, 'email');
     } finally {
       setBusy(false);
     }
@@ -178,60 +136,19 @@ export default function SignInScreen() {
     setGoogleBusy(true);
 
     try {
-      // 1. If Supabase is configured, use Supabase OAuth flow
-      if (isSupabaseConfigured()) {
-        const res = await signInWithSupabaseGoogle();
-        if (res.cancelled) {
-          setError('Google login cancelled.');
-          setGoogleBusy(false);
-        } else if (res.error) {
-          setError('Google sign-in failed. Please try again.');
-          setGoogleBusy(false);
-        }
-        // If web OAuth redirect was triggered, browser navigates away
-        return;
-      }
-
-      // 2. Fallback to direct Google OAuth if Supabase is not configured yet
-      if (!googleClientId) {
-        setError('Google OAuth is not configured. Please check .env.local.');
-        setGoogleBusy(false);
-        return;
-      }
-
-      if (!request) {
-        setError('Preparing Google sign-in. Please try again in a moment.');
-        setGoogleBusy(false);
-        return;
-      }
-
-      const res = await promptAsync();
-
-      if (res?.type === 'success' && res.params.code) {
-        const tokens = await exchangeGoogleCode(
-          res.params.code,
-          request.codeVerifier,
-          redirectUri
-        );
-
-        const userEmail = tokens.user?.email || 'user@gmail.com';
-        const userName = tokens.user?.name || userEmail.split('@')[0];
-        const userPicture = tokens.user?.picture;
-        const userSub = tokens.user?.sub;
-
-        app.signIn(userEmail, userName, 'google', userSub, userPicture);
-
-        // Run Google integration sync in background
-        app.syncGoogleData({ account: userEmail }).catch(() => {});
-      } else if (res?.type === 'cancel' || res?.type === 'dismiss') {
+      // Initiate Google OAuth directly via Supabase client
+      const res = await signInWithSupabaseGoogle();
+      if (res.cancelled) {
         setError('Google login cancelled.');
-      } else if (res?.type === 'error') {
-        setError('Google sign-in failed. Please try again.');
+        setGoogleBusy(false);
+      } else if (res.error) {
+        setError('Google sign-in is currently unavailable. Please try again.');
+        setGoogleBusy(false);
       }
+      // If web OAuth redirect was triggered, browser leaves page
     } catch (err: any) {
-      console.error('Google sign-in error:', err);
-      setError('Google sign-in failed. Please try again.');
-    } finally {
+      console.error('[Google OAuth] Error starting sign-in:', err);
+      setError('Google sign-in is currently unavailable. Please try again.');
       setGoogleBusy(false);
     }
   };

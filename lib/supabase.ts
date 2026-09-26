@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient, Session, User } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, Session } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
@@ -7,27 +7,18 @@ import * as AuthSession from 'expo-auth-session';
 // Complete any pending auth session in web browser if applicable
 WebBrowser.maybeCompleteAuthSession();
 
-const getEnvVar = (keys: string[]): string => {
-  for (const k of keys) {
-    const val = process.env[k];
-    if (val && typeof val === 'string' && val.trim().length > 0) {
-      return val.trim();
-    }
-  }
-  return '';
-};
+// Literal access for bundlers (Metro / Webpack / Next.js / Vite) with project fallback
+export const SUPABASE_URL: string =
+  process.env.EXPO_PUBLIC_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.SUPABASE_URL ||
+  'https://lrlvdvzdciywlradhfqb.supabase.co';
 
-export const SUPABASE_URL = getEnvVar([
-  'EXPO_PUBLIC_SUPABASE_URL',
-  'NEXT_PUBLIC_SUPABASE_URL',
-  'SUPABASE_URL',
-]);
-
-export const SUPABASE_ANON_KEY = getEnvVar([
-  'EXPO_PUBLIC_SUPABASE_ANON_KEY',
-  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
-  'SUPABASE_ANON_KEY',
-]);
+export const SUPABASE_ANON_KEY: string =
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxybHZkdnpkY2l5d2xyYWRoZnFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczMjQ2MTYsImV4cCI6MjEwMjkwMDYxNn0.FD--7GCZBwulX3Q8JO6GEZIunQubbyC3FS6EHeA716w';
 
 export function isSupabaseConfigured(): boolean {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
@@ -43,13 +34,15 @@ export function isSupabaseConfigured(): boolean {
 }
 
 export function getPublicSiteUrl(): string {
-  const envUrl = getEnvVar([
-    'NEXT_PUBLIC_SITE_URL',
-    'EXPO_PUBLIC_SITE_URL',
-    'NEXT_PUBLIC_APP_URL',
-    'EXPO_PUBLIC_APP_URL',
-  ]);
-  if (envUrl) return envUrl.replace(/\/+$/, '');
+  const envUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.EXPO_PUBLIC_SITE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.EXPO_PUBLIC_APP_URL;
+
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
+    return envUrl.trim().replace(/\/+$/, '');
+  }
 
   if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin;
@@ -104,7 +97,8 @@ export function getSupabaseClient(): SupabaseClient | null {
 }
 
 /**
- * Initiates Google OAuth using Supabase
+ * Initiates Google OAuth using Supabase client
+ * The Google OAuth credentials are configured exclusively in Supabase Dashboard (Auth -> Providers -> Google)
  */
 export async function signInWithSupabaseGoogle(redirectOverride?: string): Promise<{
   success: boolean;
@@ -113,7 +107,8 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
 }> {
   const client = getSupabaseClient();
   if (!client) {
-    return { success: false, error: 'Supabase is not configured yet.' };
+    console.error('[Supabase OAuth Error]: Supabase client failed to initialize with URL:', SUPABASE_URL);
+    return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
   }
 
   const redirectTo = redirectOverride || getOAuthRedirectUrl();
@@ -132,7 +127,8 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
       });
 
       if (error) {
-        return { success: false, error: error.message || 'Google sign-in failed. Please try again.' };
+        console.error('[Supabase OAuth Error]:', error);
+        return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
       }
 
       if (data?.url && typeof window !== 'undefined') {
@@ -154,11 +150,12 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
       });
 
       if (error) {
-        return { success: false, error: error.message || 'Google sign-in failed. Please try again.' };
+        console.error('[Supabase OAuth Error]:', error);
+        return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
       }
 
       if (!data?.url) {
-        return { success: false, error: 'Failed to generate Google login URL.' };
+        return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
       }
 
       const res = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
@@ -169,7 +166,8 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
         if (code) {
           const { error: exchangeErr } = await client.auth.exchangeCodeForSession(code);
           if (exchangeErr) {
-            return { success: false, error: exchangeErr.message };
+            console.error('[Supabase Code Exchange Error]:', exchangeErr);
+            return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
           }
           return { success: true };
         }
@@ -181,7 +179,8 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
       }
     }
   } catch (err: any) {
-    return { success: false, error: err?.message || 'Google sign-in failed. Please try again.' };
+    console.error('[Supabase signInWithOAuth Exception]:', err);
+    return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
   }
 }
 
@@ -198,23 +197,23 @@ export async function exchangeSupabaseCode(code: string): Promise<{ session: Ses
 }
 
 /**
- * Sign in with email and password
+ * Sign in with email and password using Supabase
  */
 export async function signInWithEmailPassword(email: string, password: string) {
   const client = getSupabaseClient();
   if (!client) {
-    throw new Error('Supabase is not configured.');
+    throw new Error('Authentication is currently unavailable.');
   }
   return await client.auth.signInWithPassword({ email, password });
 }
 
 /**
- * Sign up with email and password
+ * Sign up with email and password using Supabase
  */
 export async function signUpWithEmailPassword(email: string, password: string, name?: string) {
   const client = getSupabaseClient();
   if (!client) {
-    throw new Error('Supabase is not configured.');
+    throw new Error('Authentication is currently unavailable.');
   }
   return await client.auth.signUp({
     email,
