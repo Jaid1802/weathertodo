@@ -442,6 +442,19 @@ app.post('/api/auth/google/revoke', async (req, res) => {
   }
 });
 
+// OAuth callback redirect handler
+app.get(['/auth/callback', '/api/auth/callback'], (req, res) => {
+  const frontendUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.EXPO_PUBLIC_APP_URL ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.EXPO_PUBLIC_SITE_URL ||
+    'http://localhost:3000';
+  const queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  res.redirect(`${frontendUrl.replace(/\/+$/, '')}/${queryString}`);
+});
+
+
 
 // --- Ask Clever helpers ---
 

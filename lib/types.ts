@@ -113,6 +113,7 @@ export interface UserProfile {
   createdAt: number;
   provider: 'email' | 'google' | 'guest';
   headline?: string;
+  avatarUrl?: string;
 }
 
 export type CleverActionKind = 'addTask' | 'addEvent' | 'addReminder' | 'deleteTask' | 'deleteEvent' | 'confirmAction';

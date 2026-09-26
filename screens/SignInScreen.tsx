@@ -1,11 +1,27 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as WebBrowser from 'expo-web-browser';
+import * as AuthSession from 'expo-auth-session';
 import WeatherBackground from '../components/WeatherBackground';
 import { Btn, GlassCard, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
 import { Radius, Space, getSky } from '../lib/theme';
+import {
+  isSupabaseConfigured,
+  signInWithSupabaseGoogle,
+  signInWithEmailPassword,
+  signUpWithEmailPassword,
+} from '../lib/supabase';
+import {
+  googleDiscovery,
+  GOOGLE_SCOPES,
+  exchangeGoogleCode,
+} from '../lib/googleAuth';
+
+// Complete auth session if returning from web browser
+WebBrowser.maybeCompleteAuthSession();
 
 export default function SignInScreen() {
   const app = useApp();
@@ -14,12 +30,72 @@ export default function SignInScreen() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const hour = new Date().getHours();
   const sky = getSky(hour >= 6 && hour < 17 ? 'clear-day' : hour >= 17 && hour < 20 ? 'sunset' : 'clear-night');
   const onSky = sky.onSky;
   const onSkyMuted = sky.onSkyMuted;
+
+  // Direct Google OAuth configuration (used if Supabase is not configured or for direct Google provider)
+  const redirectUri =
+    process.env.EXPO_PUBLIC_GOOGLE_REDIRECT_URI ||
+    process.env.GOOGLE_REDIRECT_URI ||
+    process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI ||
+    (Platform.OS === 'web' && typeof window !== 'undefined'
+      ? `${window.location.origin}/auth/google/callback`
+      : AuthSession.makeRedirectUri({
+          scheme: 'weatherwhattodo',
+          path: 'auth/google/callback',
+        }));
+
+  const googleClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    '';
+
+  const [request, , promptAsync] = AuthSession.useAuthRequest(
+    {
+      clientId: googleClientId,
+      scopes: GOOGLE_SCOPES,
+      redirectUri,
+      responseType: AuthSession.ResponseType.Code,
+      usePKCE: true,
+      extraParams: {
+        access_type: 'offline',
+        prompt: 'consent',
+      },
+    },
+    googleDiscovery
+  );
+
+  // Check URL parameters for OAuth error upon mount
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location) {
+      try {
+        const url = new URL(window.location.href);
+        const err =
+          url.searchParams.get('error_description') ||
+          url.searchParams.get('error') ||
+          url.searchParams.get('auth_error');
+
+        if (err) {
+          if (err.toLowerCase().includes('cancel') || err.toLowerCase().includes('closed')) {
+            setError('Google login cancelled.');
+          } else {
+            setError('Google sign-in failed. Please try again.');
+          }
+          // Clean error parameter from URL
+          url.searchParams.delete('error');
+          url.searchParams.delete('error_description');
+          url.searchParams.delete('auth_error');
+          window.history.replaceState({}, document.title, url.pathname);
+        }
+      } catch {}
+    }
+  }, []);
 
   const inputStyle = {
     backgroundColor: 'rgba(255,255,255,0.14)',
@@ -35,6 +111,7 @@ export default function SignInScreen() {
   } as any;
 
   const submit = async () => {
+    if (busy || googleBusy) return;
     setError(null);
     if (!email.includes('@') || email.length < 5) {
       setError('Enter a valid email address.');
@@ -49,9 +126,114 @@ export default function SignInScreen() {
       return;
     }
     setBusy(true);
-    await new Promise((r) => setTimeout(r, 900));
-    app.signIn(email.trim().toLowerCase(), mode === 'up' ? name.trim() : undefined, 'email');
-    setBusy(false);
+
+    try {
+      if (isSupabaseConfigured()) {
+        if (mode === 'up') {
+          const { data, error: supaErr } = await signUpWithEmailPassword(
+            email.trim().toLowerCase(),
+            password,
+            name.trim()
+          );
+          if (supaErr) {
+            setError(supaErr.message || 'Failed to create account.');
+            setBusy(false);
+            return;
+          }
+          if (data?.user) {
+            app.signIn(data.user.email || email, name.trim(), 'email', data.user.id);
+          }
+        } else {
+          const { data, error: supaErr } = await signInWithEmailPassword(
+            email.trim().toLowerCase(),
+            password
+          );
+          if (supaErr) {
+            setError(supaErr.message || 'Invalid email or password.');
+            setBusy(false);
+            return;
+          }
+          if (data?.user) {
+            const userName =
+              data.user.user_metadata?.name ||
+              data.user.user_metadata?.full_name ||
+              email.split('@')[0];
+            app.signIn(data.user.email || email, userName, 'email', data.user.id);
+          }
+        }
+      } else {
+        await new Promise((r) => setTimeout(r, 600));
+        app.signIn(email.trim().toLowerCase(), mode === 'up' ? name.trim() : undefined, 'email');
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Authentication error.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    if (busy || googleBusy) return;
+    setError(null);
+    setGoogleBusy(true);
+
+    try {
+      // 1. If Supabase is configured, use Supabase OAuth flow
+      if (isSupabaseConfigured()) {
+        const res = await signInWithSupabaseGoogle();
+        if (res.cancelled) {
+          setError('Google login cancelled.');
+          setGoogleBusy(false);
+        } else if (res.error) {
+          setError('Google sign-in failed. Please try again.');
+          setGoogleBusy(false);
+        }
+        // If web OAuth redirect was triggered, browser navigates away
+        return;
+      }
+
+      // 2. Fallback to direct Google OAuth if Supabase is not configured yet
+      if (!googleClientId) {
+        setError('Google OAuth is not configured. Please check .env.local.');
+        setGoogleBusy(false);
+        return;
+      }
+
+      if (!request) {
+        setError('Preparing Google sign-in. Please try again in a moment.');
+        setGoogleBusy(false);
+        return;
+      }
+
+      const res = await promptAsync();
+
+      if (res?.type === 'success' && res.params.code) {
+        const tokens = await exchangeGoogleCode(
+          res.params.code,
+          request.codeVerifier,
+          redirectUri
+        );
+
+        const userEmail = tokens.user?.email || 'user@gmail.com';
+        const userName = tokens.user?.name || userEmail.split('@')[0];
+        const userPicture = tokens.user?.picture;
+        const userSub = tokens.user?.sub;
+
+        app.signIn(userEmail, userName, 'google', userSub, userPicture);
+
+        // Run Google integration sync in background
+        app.syncGoogleData({ account: userEmail }).catch(() => {});
+      } else if (res?.type === 'cancel' || res?.type === 'dismiss') {
+        setError('Google login cancelled.');
+      } else if (res?.type === 'error') {
+        setError('Google sign-in failed. Please try again.');
+      }
+    } catch (err: any) {
+      console.error('Google sign-in error:', err);
+      setError('Google sign-in failed. Please try again.');
+    } finally {
+      setGoogleBusy(false);
+    }
   };
 
   return (
@@ -136,6 +318,7 @@ export default function SignInScreen() {
                 title={mode === 'in' ? 'Sign in' : 'Create account'}
                 full
                 loading={busy}
+                disabled={busy || googleBusy}
                 kind="glass"
                 tint="rgba(255,255,255,0.26)"
                 onTint={onSky}
@@ -149,18 +332,21 @@ export default function SignInScreen() {
               </View>
 
               <Btn
-                title="Continue with Google"
+                title={googleBusy ? 'Connecting to Google...' : 'Continue with Google'}
                 icon="logo-google"
                 full
+                loading={googleBusy}
+                disabled={googleBusy || busy}
                 kind="glass"
                 tint="rgba(255,255,255,0.12)"
                 onTint={onSky}
-                onPress={() => app.signIn('you@gmail.com', 'Alex Rivera', 'google')}
+                onPress={handleGoogleSignIn}
               />
               <View style={{ height: 8 }} />
               <Btn
                 title="Continue as guest"
                 full
+                disabled={googleBusy || busy}
                 kind="glass"
                 tint="transparent"
                 onTint={onSkyMuted}

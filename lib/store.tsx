@@ -15,6 +15,13 @@ import {
   fetchGoogleTasksData,
   updateGoogleTaskStatus,
 } from './googleApi';
+import {
+  getSupabaseClient,
+  getSupabaseSession,
+  isSupabaseConfigured,
+  signOutSupabase,
+  exchangeSupabaseCode,
+} from './supabase';
 
 const KEY = '@weatherwhattodo/v1';
 
@@ -121,8 +128,8 @@ export interface Ctx {
   calendarLoading: boolean;
   tasksLoading: boolean;
   // auth
-  signIn: (email: string, name?: string, provider?: UserProfile['provider']) => void;
-  signOut: () => void;
+  signIn: (email: string, name?: string, provider?: UserProfile['provider'], customId?: string, avatarUrl?: string) => void;
+  signOut: () => Promise<void>;
   updateProfile: (p: Partial<UserProfile>) => void;
   setOnboarded: (v: boolean) => void;
   // settings
@@ -205,27 +212,144 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as PersistShape;
-        dispatch({
-          type: 'hydrate',
-          payload: {
-            ...defaultState(),
-            ...parsed,
-            settings: {
-              ...DEFAULT_SETTINGS,
-              ...(parsed.settings || {}),
-              notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.settings?.notifications || {}) },
-            },
-          },
-        });
+    let mounted = true;
+
+    (async () => {
+      let initialPersist: PersistShape = defaultState();
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = localStorage.getItem(KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw) as PersistShape;
+            initialPersist = {
+              ...defaultState(),
+              ...parsed,
+              settings: {
+                ...DEFAULT_SETTINGS,
+                ...(parsed.settings || {}),
+                notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.settings?.notifications || {}) },
+              },
+            };
+          }
+        } catch {}
+
+        // 1. Check if returning from Supabase OAuth with an authorization code
+        if (typeof window !== 'undefined' && window.location) {
+          try {
+            const url = new URL(window.location.href);
+            const code = url.searchParams.get('code');
+
+            if (isSupabaseConfigured() && code) {
+              const { session, error } = await exchangeSupabaseCode(code);
+              if (session?.user) {
+                const u = session.user;
+                const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
+                const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
+                initialPersist.user = {
+                  id: u.id,
+                  name,
+                  email: u.email || '',
+                  avatarColor: initialPersist.user?.avatarColor || '#3B5BFF',
+                  avatarUrl: avatar,
+                  createdAt: new Date(u.created_at).getTime() || Date.now(),
+                  provider: 'google',
+                  headline: initialPersist.user?.headline || 'Planning smarter every day',
+                };
+                initialPersist.onboarded = true;
+              }
+            }
+
+            // Clean up callback URL parameters without full page reload
+            if (
+              url.searchParams.has('code') ||
+              url.searchParams.has('error') ||
+              url.searchParams.has('error_description') ||
+              url.pathname.includes('/auth/callback')
+            ) {
+              const cleanPath = url.pathname.replace(/\/auth\/callback\/?/, '/') || '/';
+              window.history.replaceState({}, document.title, cleanPath);
+            }
+          } catch (e) {
+            console.warn('[Supabase] Auth callback error:', e);
+          }
+        }
+
+        // 2. Check active Supabase session if configured
+        if (isSupabaseConfigured()) {
+          try {
+            const session = await getSupabaseSession();
+            if (session?.user) {
+              const u = session.user;
+              const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
+              const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
+              initialPersist.user = {
+                id: u.id,
+                name,
+                email: u.email || '',
+                avatarColor: initialPersist.user?.avatarColor || '#3B5BFF',
+                avatarUrl: avatar || initialPersist.user?.avatarUrl,
+                createdAt: new Date(u.created_at).getTime() || Date.now(),
+                provider: (u.app_metadata?.provider === 'google' ? 'google' : 'email'),
+                headline: initialPersist.user?.headline || 'Planning smarter every day',
+              };
+              initialPersist.onboarded = true;
+            }
+          } catch (e) {
+            console.warn('[Supabase] Session check error:', e);
+          }
+        }
       }
-    } catch {}
-    hydrated.current = true;
-    setReady(true);
+
+      if (mounted) {
+        dispatch({ type: 'hydrate', payload: initialPersist });
+        hydrated.current = true;
+        setReady(true);
+      }
+    })();
+
+    // 3. Listen to Supabase Auth State changes in realtime
+    let authSub: { unsubscribe: () => void } | null = null;
+    if (isSupabaseConfigured()) {
+      const client = getSupabaseClient();
+      if (client) {
+        const { data } = client.auth.onAuthStateChange((event, session) => {
+          if (!mounted) return;
+          if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
+            if (session?.user) {
+              const u = session.user;
+              const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
+              const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
+              dispatch({
+                type: 'patch',
+                payload: {
+                  user: {
+                    id: u.id,
+                    name,
+                    email: u.email || '',
+                    avatarColor: '#3B5BFF',
+                    avatarUrl: avatar,
+                    createdAt: new Date(u.created_at).getTime() || Date.now(),
+                    provider: (u.app_metadata?.provider === 'google' ? 'google' : 'email'),
+                    headline: 'Planning smarter every day',
+                  },
+                  onboarded: true,
+                },
+              });
+            }
+          } else if (event === 'SIGNED_OUT') {
+            dispatch({ type: 'patch', payload: { user: null } });
+          }
+        });
+        authSub = data.subscription;
+      }
+    }
+
+    return () => {
+      mounted = false;
+      if (authSub) {
+        authSub.unsubscribe();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -385,26 +509,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     theme,
     scheme,
     fontScale,
-    signIn: (email, name, provider = 'email') => {
+    signIn: (email, name, provider = 'email', customId?: string, avatarUrl?: string) => {
       const colors = ['#3B5BFF', '#7B5BFF', '#0FA968', '#E8890C', '#E5484D', '#0C8CE9'];
       const nm = name || email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      const existingId = state.user?.email === email ? state.user.id : undefined;
+      const userId = customId || existingId || uid('u');
       dispatch({
         type: 'patch',
         payload: {
           user: {
-            id: uid('u'),
+            id: userId,
             name: nm,
             email,
             avatarColor: colors[Math.floor(Math.random() * colors.length)],
-            createdAt: Date.now(),
+            avatarUrl: avatarUrl || state.user?.avatarUrl,
+            createdAt: state.user?.createdAt || Date.now(),
             provider,
-            headline: 'Planning smarter every day',
+            headline: state.user?.headline || 'Planning smarter every day',
           },
           onboarded: true,
         },
       });
     },
-    signOut: () => dispatch({ type: 'patch', payload: { user: null } }),
+    signOut: async () => {
+      try {
+        await signOutSupabase();
+      } catch (err) {
+        console.warn('SignOut error:', err);
+      }
+      dispatch({ type: 'patch', payload: { user: null } });
+    },
     updateProfile: (p) => dispatch({ type: 'patch', payload: { user: state.user ? { ...state.user, ...p } : null } }),
     setOnboarded: (v) => dispatch({ type: 'patch', payload: { onboarded: v } }),
     setSettings: (p) => dispatch({ type: 'settings', payload: p }),
