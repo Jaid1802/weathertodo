@@ -34,6 +34,10 @@ export function isSupabaseConfigured(): boolean {
 }
 
 export function getPublicSiteUrl(): string {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+
   const envUrl =
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.EXPO_PUBLIC_SITE_URL ||
@@ -44,19 +48,15 @@ export function getPublicSiteUrl(): string {
     return envUrl.trim().replace(/\/+$/, '');
   }
 
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
-  }
-
-  return 'http://localhost:3000';
+  return 'https://weatherwhattodo.netlify.app';
 }
 
 export function getOAuthRedirectUrl(): string {
   if (Platform.OS === 'web') {
-    const origin = typeof window !== 'undefined' && window.location?.origin
-      ? window.location.origin
-      : getPublicSiteUrl();
-    return `${origin}/auth/callback`;
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      return `${window.location.origin}/auth/callback`;
+    }
+    return `${getPublicSiteUrl()}/auth/callback`;
   }
 
   return AuthSession.makeRedirectUri({

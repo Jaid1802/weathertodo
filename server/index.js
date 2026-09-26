@@ -449,7 +449,7 @@ app.get(['/auth/callback', '/api/auth/callback'], (req, res) => {
     process.env.EXPO_PUBLIC_APP_URL ||
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.EXPO_PUBLIC_SITE_URL ||
-    'http://localhost:3000';
+    'https://weatherwhattodo.netlify.app';
   const queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
   res.redirect(`${frontendUrl.replace(/\/+$/, '')}/${queryString}`);
 });

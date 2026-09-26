@@ -11,7 +11,7 @@ export default async function handler(req: any, res: any) {
     process.env.EXPO_PUBLIC_SITE_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.EXPO_PUBLIC_APP_URL ||
-    'http://localhost:3000';
+    'https://weatherwhattodo.netlify.app';
 
   if (error) {
     const errorMsg = encodeURIComponent(error_description || error || 'Google login cancelled');
