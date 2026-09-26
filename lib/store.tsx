@@ -8,7 +8,7 @@ import { seedCalendars, seedEvents, seedLists, seedReminders, seedTasks } from '
 import { DEFAULT_PLACES, Place, WeatherBundle, fetchWeather, synthesize, reverseGeocode } from './weather';
 import { AppTheme, ColorScheme, getTheme } from './theme';
 import { dateKey, uid } from './utils';
-import { getValidAccessToken, getStoredGoogleUser, disconnectGoogleAccount } from './googleAuth';
+import { getValidAccessToken, getStoredGoogleUser, disconnectGoogleAccount, clearStoredGoogleTokens } from './googleAuth';
 import {
   fetchAllGoogleData,
   fetchGoogleCalendarData,
@@ -510,10 +510,43 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     scheme,
     fontScale,
     signIn: (email, name, provider = 'email', customId?: string, avatarUrl?: string) => {
+      // 1. Explicit handling for Guest session
+      if (provider === 'guest') {
+        dispatch({
+          type: 'patch',
+          payload: {
+            user: {
+              id: 'guest_user',
+              name: 'Guest',
+              email: 'guest@weatherwhattodo.app',
+              avatarColor: '#64748B',
+              avatarUrl: undefined,
+              createdAt: Date.now(),
+              provider: 'guest',
+              headline: 'Planning smarter every day',
+            },
+            integrations: {
+              googleCalendar: false,
+              googleTasks: false,
+              account: undefined,
+              lastSyncCalendar: undefined,
+              lastSyncTasks: undefined,
+            },
+            onboarded: true,
+          },
+        });
+        return;
+      }
+
+      // 2. Handling for Authenticated users (Google or Email/Password)
       const colors = ['#3B5BFF', '#7B5BFF', '#0FA968', '#E8890C', '#E5484D', '#0C8CE9'];
-      const nm = name || email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-      const existingId = state.user?.email === email ? state.user.id : undefined;
+      const rawName = name || email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      const nm = (rawName.trim() === 'Guest' || rawName.trim() === 'Guest User') ? (email.split('@')[0] || 'User') : rawName;
+      const existingId = (state.user && state.user.provider !== 'guest' && state.user.email === email)
+        ? state.user.id
+        : undefined;
       const userId = customId || existingId || uid('u');
+
       dispatch({
         type: 'patch',
         payload: {
@@ -522,10 +555,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             name: nm,
             email,
             avatarColor: colors[Math.floor(Math.random() * colors.length)],
-            avatarUrl: avatarUrl || state.user?.avatarUrl,
-            createdAt: state.user?.createdAt || Date.now(),
+            avatarUrl: avatarUrl || (state.user?.provider !== 'guest' ? state.user?.avatarUrl : undefined),
+            createdAt: (state.user && state.user.provider !== 'guest') ? state.user.createdAt : Date.now(),
             provider,
-            headline: state.user?.headline || 'Planning smarter every day',
+            headline: (state.user && state.user.provider !== 'guest' ? state.user.headline : 'Planning smarter every day'),
           },
           onboarded: true,
         },
@@ -537,7 +570,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       } catch (err) {
         console.warn('SignOut error:', err);
       }
-      dispatch({ type: 'patch', payload: { user: null } });
+      try {
+        await clearStoredGoogleTokens();
+      } catch {}
+      dispatch({
+        type: 'patch',
+        payload: {
+          user: null,
+          integrations: {
+            googleCalendar: false,
+            googleTasks: false,
+            account: undefined,
+            lastSyncCalendar: undefined,
+            lastSyncTasks: undefined,
+          },
+        },
+      });
     },
     updateProfile: (p) => dispatch({ type: 'patch', payload: { user: state.user ? { ...state.user, ...p } : null } }),
     setOnboarded: (v) => dispatch({ type: 'patch', payload: { onboarded: v } }),

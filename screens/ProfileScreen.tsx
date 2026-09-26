@@ -22,15 +22,16 @@ export default function ProfileScreen({ navigation }: any) {
   const isDark = scheme === 'dark';
 
   const user = state.user;
+  const isGuest = !user || user.provider === 'guest';
   const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(user?.name ?? 'Guest User');
+  const [name, setName] = useState(isGuest ? 'Guest' : (user?.name ?? ''));
   const [headline, setHeadline] = useState(user?.headline ?? 'Planning smarter every day');
 
-  // Display values (preserving user info if present, with defaults from reference)
-  const displayName = user?.name && user.name !== 'Guest' ? user.name : 'Guest User';
-  const displayEmail = user?.email || 'guest@aurelia.app';
+  // Display values (Strictly enforce 'Guest' for guest login)
+  const displayName = isGuest ? 'Guest' : (user?.name?.trim() || 'User');
+  const displayEmail = isGuest ? 'guest@weatherwhattodo.app' : (user?.email || '');
   const displayHeadline = user?.headline || 'Planning smarter every day';
-  const userInitials = initials(displayName) || 'GU';
+  const userInitials = isGuest ? 'G' : initials(displayName) || 'U';
 
   const bg = isDark ? '#0B1120' : '#F8FAFC';
   const cardBg = isDark ? '#1E293B' : '#FFFFFF';
@@ -173,19 +174,25 @@ export default function ProfileScreen({ navigation }: any) {
       <Sheet visible={editing} onClose={() => setEditing(false)} title="Edit profile">
         <Text style={[styles.sheetLabel, { color: textMuted }]}>NAME</Text>
         <TextInput
-          value={name}
-          onChangeText={setName}
-          placeholder="Guest User"
+          value={isGuest ? 'Guest' : name}
+          onChangeText={isGuest ? undefined : setName}
+          editable={!isGuest}
+          placeholder="Guest"
           placeholderTextColor={textMuted}
           style={[
             styles.sheetInput,
             {
               backgroundColor: isDark ? '#0F172A' : '#F1F5F9',
-              color: textPrimary,
+              color: isGuest ? textMuted : textPrimary,
               borderColor: cardBorder,
             },
           ]}
         />
+        {isGuest && (
+          <Text style={{ fontSize: 12, color: textMuted, marginTop: -8, marginBottom: 12 }}>
+            Guest accounts use the fixed display name "Guest".
+          </Text>
+        )}
         <Text style={[styles.sheetLabel, { color: textMuted }]}>HEADLINE</Text>
         <TextInput
           value={headline}
@@ -205,7 +212,8 @@ export default function ProfileScreen({ navigation }: any) {
           title="Save changes"
           full
           onPress={() => {
-            app.updateProfile({ name: name.trim() || 'Guest User', headline: headline.trim() });
+            const finalName = isGuest ? 'Guest' : (name.trim() || 'User');
+            app.updateProfile({ name: finalName, headline: headline.trim() });
             setEditing(false);
           }}
         />

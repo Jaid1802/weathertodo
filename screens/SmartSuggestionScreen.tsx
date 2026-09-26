@@ -69,9 +69,9 @@ export default function SmartSuggestionScreen({ navigation }: any) {
       tasks: todayTasks,
       allTasks: state.tasks,
       reminders: state.reminders,
-      integrations: state.integrations,
+      integrations: state.user?.provider === 'guest' ? { googleCalendar: false, googleTasks: false } : state.integrations,
       settings,
-      userName: state.user?.name ?? 'there',
+      userName: (state.user?.provider === 'guest' || !state.user) ? 'Guest' : (state.user?.name || 'User'),
       now: new Date(),
     };
   }, [weather, activePlace, todayEvents, state.events, todayTasks, state.tasks, state.reminders, state.integrations, settings, state.user]);

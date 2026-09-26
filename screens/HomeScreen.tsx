@@ -102,9 +102,9 @@ export default function HomeScreen({ navigation }: any) {
       tasks: todayTasks,
       allTasks: state.tasks,
       reminders: state.reminders,
-      integrations: state.integrations,
+      integrations: state.user?.provider === 'guest' ? { googleCalendar: false, googleTasks: false } : state.integrations,
       settings,
-      userName: state.user?.name ?? 'Guest',
+      userName: (state.user?.provider === 'guest' || !state.user) ? 'Guest' : (state.user?.name || 'User'),
       now: new Date(),
     };
   }, [weather, activePlace, todayEvents, state.events, todayTasks, state.tasks, state.reminders, state.integrations, settings, state.user]);
@@ -162,7 +162,10 @@ export default function HomeScreen({ navigation }: any) {
     return `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
   }, []);
 
-  const userName = state.user?.name ? state.user.name.split(' ')[0] : 'Guest';
+  const isGuest = !state.user || state.user.provider === 'guest';
+  const userName = isGuest
+    ? 'Guest'
+    : (state.user?.name?.trim() ? state.user.name.split(' ')[0] : 'User');
 
   // Find hourly weather for scheduled events
   const getEventWeather = useCallback(
