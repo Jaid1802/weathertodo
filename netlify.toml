@@ -12,6 +12,18 @@
   force = true
 
 [[redirects]]
+  from = "/auth/callback"
+  to = "/index.html"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/auth/google/callback"
+  to = "/auth/callback"
+  status = 301
+  force = true
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
