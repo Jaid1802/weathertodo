@@ -44,7 +44,7 @@ This guide walks you through setting up real Google OAuth 2.0, Google Calendar A
    - `https://weatherwhattodo.netlify.app` (Production Netlify frontend)
 5. Under **Authorized redirect URIs**, add:
    - `http://localhost:8081/auth/google/callback` (Local dev callback)
-   - `https://weatherwhattodo.netlify.app/auth/google/callback` (Production frontend callback)
+   - `https://lrlvdvzdciywlradhfqb.supabase.co/auth/v1/callback` (Production frontend callback)
    - `weatherwhattodo://auth/google/callback` (for Expo custom scheme on native)
 6. Click **Create**.
 7. Copy the **Client ID** and **Client Secret**.
