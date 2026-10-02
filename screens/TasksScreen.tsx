@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { FlatList, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Badge, Btn, Card, Chip, EmptyState, IconBtn, Ring, Segmented, Sheet, Touch, Txt } from '../components/ui';
+import { Badge, Btn, Card, Chip, ConfirmDialog, EmptyState, IconBtn, Ring, Segmented, Sheet, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
 import { Radius, Space } from '../lib/theme';
 import { bestOutdoorWindow, condition } from '../lib/weather';
@@ -21,6 +21,7 @@ export default function TasksScreen({ navigation }: any) {
   const [showLists, setShowLists] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [newListName, setNewListName] = useState('');
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
 
   React.useEffect(() => {
     if (state.integrations.googleTasks) {
@@ -153,7 +154,13 @@ export default function TasksScreen({ navigation }: any) {
               </Txt>
             );
           }
-          return <TaskRow task={item} onPress={() => navigation.navigate('TaskEditor', { id: item.id })} />;
+          return (
+            <TaskRow
+              task={item}
+              onPress={() => navigation.navigate('TaskEditor', { id: item.id })}
+              onDelete={(t) => setTaskToDelete(t)}
+            />
+          );
         }}
         ListEmptyComponent={
           <Card style={{ marginTop: Space.md }}>
@@ -166,6 +173,21 @@ export default function TasksScreen({ navigation }: any) {
             />
           </Card>
         }
+      />
+
+      <ConfirmDialog
+        visible={Boolean(taskToDelete)}
+        title="Delete task?"
+        message={`Are you sure you want to delete\n'${taskToDelete?.title || ''}'?`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onCancel={() => setTaskToDelete(null)}
+        onConfirm={() => {
+          if (taskToDelete) {
+            app.deleteTask(taskToDelete.id);
+            setTaskToDelete(null);
+          }
+        }}
       />
 
       <Sheet visible={showLists} onClose={() => setShowLists(false)} title="Lists">
@@ -205,7 +227,7 @@ export default function TasksScreen({ navigation }: any) {
   );
 }
 
-function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
+function TaskRow({ task, onPress, onDelete }: { task: Task; onPress: () => void; onDelete?: (task: Task) => void }) {
   const app = useApp();
   const { state, theme } = app;
   const list = state.lists.find((l) => l.id === task.listId);
@@ -248,6 +270,14 @@ function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
             {task.source === 'google' && <Badge label="GOOGLE" color={theme.textTertiary} bg={theme.surfaceAlt} />}
           </View>
         </Touch>
+
+        {onDelete && (
+          <Touch onPress={() => onDelete(task)} hitSlop={10} scale={0.88} accessibilityLabel={`Delete ${task.title}`}>
+            <View style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>
+              <Ionicons name="trash-outline" size={16} color={theme.textTertiary} />
+            </View>
+          </Touch>
+        )}
 
         <View style={{ width: 4, height: 30, borderRadius: 4, backgroundColor: task.done ? 'transparent' : PRIORITY_COLOR[task.priority], opacity: 0.85 }} />
       </View>

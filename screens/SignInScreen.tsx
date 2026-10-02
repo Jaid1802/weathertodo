@@ -31,27 +31,40 @@ export default function SignInScreen() {
   const onSky = sky.onSky;
   const onSkyMuted = sky.onSkyMuted;
 
-  // Check URL parameters for OAuth error upon mount
+  // Check URL parameters and sessionStorage for OAuth error upon mount
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.location) {
+    if (typeof window !== 'undefined') {
       try {
-        const url = new URL(window.location.href);
-        const err =
-          url.searchParams.get('error_description') ||
-          url.searchParams.get('error') ||
-          url.searchParams.get('auth_error');
+        let err: string | null = null;
+        if (window.location) {
+          const url = new URL(window.location.href);
+          err =
+            url.searchParams.get('error_description') ||
+            url.searchParams.get('error') ||
+            url.searchParams.get('auth_error');
+
+          if (err) {
+            url.searchParams.delete('error');
+            url.searchParams.delete('error_description');
+            url.searchParams.delete('auth_error');
+            window.history.replaceState({}, document.title, url.pathname);
+          }
+        }
+
+        if (!err && window.sessionStorage) {
+          err = window.sessionStorage.getItem('@weatherwhattodo/auth_error');
+          if (err) {
+            window.sessionStorage.removeItem('@weatherwhattodo/auth_error');
+          }
+        }
 
         if (err) {
-          if (err.toLowerCase().includes('cancel') || err.toLowerCase().includes('closed')) {
+          const cleanErr = decodeURIComponent(err);
+          if (cleanErr.toLowerCase().includes('cancel') || cleanErr.toLowerCase().includes('closed')) {
             setError('Google login cancelled.');
           } else {
-            setError('Google sign-in is currently unavailable. Please try again.');
+            setError(cleanErr);
           }
-          // Clean error parameter from URL
-          url.searchParams.delete('error');
-          url.searchParams.delete('error_description');
-          url.searchParams.delete('auth_error');
-          window.history.replaceState({}, document.title, url.pathname);
         }
       } catch {}
     }
@@ -142,13 +155,13 @@ export default function SignInScreen() {
         setError('Google login cancelled.');
         setGoogleBusy(false);
       } else if (res.error) {
-        setError('Google sign-in is currently unavailable. Please try again.');
+        setError(res.error);
         setGoogleBusy(false);
       }
       // If web OAuth redirect was triggered, browser leaves page
     } catch (err: any) {
       console.error('[Google OAuth] Error starting sign-in:', err);
-      setError('Google sign-in is currently unavailable. Please try again.');
+      setError(err?.message || 'Google sign-in is currently unavailable. Please try again.');
       setGoogleBusy(false);
     }
   };

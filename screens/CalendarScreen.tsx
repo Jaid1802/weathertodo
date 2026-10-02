@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Animated, FlatList, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Badge, Btn, Card, Chip, EmptyState, IconBtn, Segmented, Sheet, Toggle, Touch, Txt } from '../components/ui';
+import { Badge, Btn, Card, Chip, ConfirmDialog, EmptyState, IconBtn, Segmented, Sheet, Toggle, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
 import { Radius, Space, shadow } from '../lib/theme';
 import { condition, fmtTemp } from '../lib/weather';
@@ -23,6 +23,7 @@ export default function CalendarScreen({ navigation }: any) {
   const [view, setView] = useState<'month' | 'week' | 'agenda'>('month');
   const [showCals, setShowCals] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [eventToDelete, setEventToDelete] = useState<CalEvent | null>(null);
 
   React.useEffect(() => {
     if (state.integrations.googleCalendar) {
@@ -277,7 +278,14 @@ export default function CalendarScreen({ navigation }: any) {
                     </View>
                     <Card padded={false}>
                       {g.events.map((e, i) => (
-                        <EventRow key={e.id} event={e} last={i === g.events.length - 1} onPress={() => navigation.navigate('EventEditor', { id: e.id })} weatherCode={w?.code} />
+                        <EventRow
+                          key={e.id}
+                          event={e}
+                          last={i === g.events.length - 1}
+                          onPress={() => navigation.navigate('EventEditor', { id: e.id })}
+                          onDelete={(ev) => setEventToDelete(ev)}
+                          weatherCode={w?.code}
+                        />
                       ))}
                     </Card>
                   </View>
@@ -321,7 +329,14 @@ export default function CalendarScreen({ navigation }: any) {
                 {selectedEvents.length > 0 && (
                   <Card padded={false} style={{ marginBottom: Space.md }}>
                     {selectedEvents.map((e, i) => (
-                      <EventRow key={e.id} event={e} last={i === selectedEvents.length - 1} onPress={() => navigation.navigate('EventEditor', { id: e.id })} weatherCode={weatherByDay[selected]?.code} />
+                      <EventRow
+                        key={e.id}
+                        event={e}
+                        last={i === selectedEvents.length - 1}
+                        onPress={() => navigation.navigate('EventEditor', { id: e.id })}
+                        onDelete={(ev) => setEventToDelete(ev)}
+                        weatherCode={weatherByDay[selected]?.code}
+                      />
                     ))}
                   </Card>
                 )}
@@ -370,6 +385,21 @@ export default function CalendarScreen({ navigation }: any) {
         )}
       </ScrollView>
 
+      <ConfirmDialog
+        visible={Boolean(eventToDelete)}
+        title="Delete event?"
+        message={`Are you sure you want to delete\n'${eventToDelete?.title || ''}'?`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onCancel={() => setEventToDelete(null)}
+        onConfirm={() => {
+          if (eventToDelete) {
+            app.deleteEvent(eventToDelete.id);
+            setEventToDelete(null);
+          }
+        }}
+      />
+
       <Sheet visible={showCals} onClose={() => setShowCals(false)} title="Calendars">
         {state.calendars.map((c) => (
           <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 }}>
@@ -388,7 +418,19 @@ export default function CalendarScreen({ navigation }: any) {
   );
 }
 
-function EventRow({ event, last, onPress, weatherCode }: { event: CalEvent; last: boolean; onPress: () => void; weatherCode?: number }) {
+function EventRow({
+  event,
+  last,
+  onPress,
+  onDelete,
+  weatherCode,
+}: {
+  event: CalEvent;
+  last: boolean;
+  onPress: () => void;
+  onDelete?: (e: CalEvent) => void;
+  weatherCode?: number;
+}) {
   const { state, theme } = useApp();
   const cal = state.calendars.find((c) => c.id === event.calendarId);
   const risky = event.isOutdoor && weatherCode !== undefined && condition(weatherCode).outdoorScore < 50;
@@ -411,6 +453,13 @@ function EventRow({ event, last, onPress, weatherCode }: { event: CalEvent; last
               {event.source === 'google' && <Badge label="GOOGLE" color={theme.textTertiary} bg={theme.surfaceAlt} />}
             </View>
           </View>
+          {onDelete && (
+            <Touch onPress={() => onDelete(event)} hitSlop={10} scale={0.88} accessibilityLabel={`Delete ${event.title}`}>
+              <View style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginRight: 4 }}>
+                <Ionicons name="trash-outline" size={16} color={theme.textTertiary} />
+              </View>
+            </Touch>
+          )}
           <Ionicons name="chevron-forward" size={16} color={theme.textTertiary} style={{ alignSelf: 'center' }} />
         </View>
       </Touch>

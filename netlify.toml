@@ -6,6 +6,12 @@
   NODE_VERSION = "20"
 
 [[redirects]]
+  from = "/auth/callback"
+  to = "/index.html"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/*"
   to = "https://weatherwhattodo-backend.onrender.com/api/:splat"
   status = 200
@@ -27,3 +33,4 @@
   from = "/*"
   to = "/index.html"
   status = 200
+

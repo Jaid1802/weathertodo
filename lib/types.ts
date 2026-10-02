@@ -18,6 +18,7 @@ export interface Task {
   createdAt: number;
   estimateMin?: number;
   subtasks?: { id: string; title: string; done: boolean }[];
+  reminderMinutesBefore?: number; // minutes before due time (e.g. 0, 15, 30, 60)
 }
 
 export interface TaskList {
@@ -45,6 +46,7 @@ export interface CalEvent {
   source: TaskSource;
   attendees?: string[];
   status?: string;
+  reminderMinutesBefore?: number; // minutes before start time (e.g. 10, 30, 60)
 }
 
 export interface CalendarInfo {

@@ -451,7 +451,7 @@ app.get(['/auth/callback', '/api/auth/callback'], (req, res) => {
     process.env.EXPO_PUBLIC_SITE_URL ||
     'https://weatherwhattodo.netlify.app';
   const queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  res.redirect(`${frontendUrl.replace(/\/+$/, '')}/${queryString}`);
+  res.redirect(`${frontendUrl.replace(/\/+$/, '')}/auth/callback${queryString}`);
 });
 
 

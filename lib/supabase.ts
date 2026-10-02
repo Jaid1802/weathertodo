@@ -35,12 +35,7 @@ export function isSupabaseConfigured(): boolean {
   return SUPABASE_URL.startsWith('http://') || SUPABASE_URL.startsWith('https://');
 }
 
-const PRODUCTION_SITE_URL = 'https://weatherwhattodo.netlify.app';
-
 export function getPublicSiteUrl(): string {
-  // Never derive the production OAuth target from an old Netlify alias,
-  // preview URL, or another hostname. Local development may still use
-  // the current browser origin.
   if (typeof window !== 'undefined' && window.location?.origin) {
     const hostname = window.location.hostname;
     const isLocalhost =
@@ -61,7 +56,6 @@ export function getPublicSiteUrl(): string {
 
   if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
     const normalized = envUrl.trim().replace(/\/+$/, '');
-    // Production must stay on the canonical Netlify hostname.
     if (normalized === PRODUCTION_SITE_URL) return normalized;
   }
 
@@ -70,7 +64,19 @@ export function getPublicSiteUrl(): string {
 
 export function getOAuthRedirectUrl(): string {
   if (Platform.OS === 'web') {
-    return `${getPublicSiteUrl()}/auth/callback`;
+    if (typeof window !== 'undefined' && window.location?.hostname) {
+      const hostname = window.location.hostname;
+      const isLocalhost =
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '[::1]';
+      if (isLocalhost) {
+        const port = window.location.port ? `:${window.location.port}` : ':8081';
+        return `http://${hostname}${port}/auth/callback`;
+      }
+    }
+    // Production web OAuth redirect must ALWAYS resolve to the official production callback
+    return `${PRODUCTION_SITE_URL}/auth/callback`;
   }
 
   return AuthSession.makeRedirectUri({
@@ -142,7 +148,7 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
 
       if (error) {
         console.error('[Supabase OAuth Error]:', error);
-        return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
+        return { success: false, error: error.message || 'Google sign-in is currently unavailable. Please try again.' };
       }
 
       if (data?.url && typeof window !== 'undefined') {
@@ -165,11 +171,11 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
 
       if (error) {
         console.error('[Supabase OAuth Error]:', error);
-        return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
+        return { success: false, error: error.message || 'Google sign-in is currently unavailable. Please try again.' };
       }
 
       if (!data?.url) {
-        return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
+        return { success: false, error: 'Google sign-in initialization failed. Please try again.' };
       }
 
       const res = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
@@ -181,7 +187,7 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
           const { error: exchangeErr } = await client.auth.exchangeCodeForSession(code);
           if (exchangeErr) {
             console.error('[Supabase Code Exchange Error]:', exchangeErr);
-            return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
+            return { success: false, error: exchangeErr.message || 'Google sign-in was not completed.' };
           }
           return { success: true };
         }
@@ -194,7 +200,7 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
     }
   } catch (err: any) {
     console.error('[Supabase signInWithOAuth Exception]:', err);
-    return { success: false, error: 'Google sign-in is currently unavailable. Please try again.' };
+    return { success: false, error: err?.message || 'Google sign-in is currently unavailable. Please try again.' };
   }
 }
 

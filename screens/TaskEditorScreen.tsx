@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Badge, Btn, Card, IconBtn, Toggle, Touch, Txt } from '../components/ui';
+import { Badge, Btn, Card, ConfirmDialog, IconBtn, Toggle, Touch, Txt } from '../components/ui';
 import { DateStrip, Field, OptionGrid, TimeStrip } from '../components/Pickers';
 import { useApp } from '../lib/store';
 import { Radius, Space } from '../lib/theme';
@@ -23,9 +23,11 @@ export default function TaskEditorScreen({ navigation, route }: any) {
   const [context, setContext] = useState<TaskContext>(existing?.context ?? 'anywhere');
   const [dueDate, setDueDate] = useState<string | undefined>(existing?.dueDate ?? dateKey(new Date()));
   const [dueMinutes, setDueMinutes] = useState<number | undefined>(existing?.dueMinutes);
+  const [reminderMin, setReminderMin] = useState<number>(existing?.reminderMinutesBefore ?? 30);
   const [estimate, setEstimate] = useState<number>(existing?.estimateMin ?? 30);
   const [subtasks, setSubtasks] = useState(existing?.subtasks ?? []);
   const [subInput, setSubInput] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const inputStyle = {
     backgroundColor: theme.bgElevated,
@@ -51,6 +53,7 @@ export default function TaskEditorScreen({ navigation, route }: any) {
       context,
       dueDate,
       dueMinutes,
+      reminderMinutesBefore: dueMinutes !== undefined ? reminderMin : undefined,
       estimateMin: estimate,
       subtasks,
       done: existing?.done ?? false,
@@ -66,9 +69,32 @@ export default function TaskEditorScreen({ navigation, route }: any) {
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
         <IconBtn icon="close" onPress={() => navigation.goBack()} label="Cancel" />
         <Txt v="headline" w="700" style={{ flex: 1 }}>{existing ? 'Edit task' : 'New task'}</Txt>
-        {existing && <IconBtn icon="trash-outline" color={theme.danger} onPress={() => { app.deleteTask(existing.id); navigation.goBack(); }} label="Delete task" />}
+        {existing && (
+          <IconBtn
+            icon="trash-outline"
+            color={theme.danger}
+            onPress={() => setConfirmDelete(true)}
+            label="Delete task"
+          />
+        )}
         <Btn title="Save" small onPress={save} />
       </View>
+
+      <ConfirmDialog
+        visible={confirmDelete}
+        title="Delete task?"
+        message={`Are you sure you want to delete\n'${existing?.title || 'this task'}'?`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => {
+          if (existing) {
+            app.deleteTask(existing.id);
+          }
+          setConfirmDelete(false);
+          navigation.goBack();
+        }}
+      />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={{ padding: Space.lg, paddingBottom: 60 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -150,6 +176,34 @@ export default function TaskEditorScreen({ navigation, route }: any) {
           {dueDate && (
             <Field label="Due time">
               <TimeStrip value={dueMinutes} onChange={setDueMinutes} use24h={state.settings.use24h} allowNone />
+            </Field>
+          )}
+
+          {dueDate && dueMinutes !== undefined && (
+            <Field label={`Reminder · ${reminderMin === 0 ? 'At due time' : `${reminderMin}m before`}`}>
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                {[
+                  { m: 0, label: 'At due time' },
+                  { m: 15, label: '15m before' },
+                  { m: 30, label: '30m before' },
+                  { m: 60, label: '1h before' },
+                ].map((opt) => (
+                  <Touch key={opt.m} onPress={() => setReminderMin(opt.m)} scale={0.94}>
+                    <View
+                      style={{
+                        paddingHorizontal: 14,
+                        paddingVertical: 9,
+                        borderRadius: Radius.pill,
+                        backgroundColor: reminderMin === opt.m ? theme.accent : theme.surfaceAlt,
+                      }}
+                    >
+                      <Txt v="sub" w="600" c={reminderMin === opt.m ? theme.onAccent : theme.textSecondary}>
+                        {opt.label}
+                      </Txt>
+                    </View>
+                  </Touch>
+                ))}
+              </View>
             </Field>
           )}
 

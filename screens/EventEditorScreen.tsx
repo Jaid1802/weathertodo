@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Badge, Btn, Card, IconBtn, Toggle, Touch, Txt } from '../components/ui';
+import { Badge, Btn, Card, ConfirmDialog, IconBtn, Toggle, Touch, Txt } from '../components/ui';
 import { DateStrip, Field, OptionGrid, TimeStrip } from '../components/Pickers';
 import { useApp } from '../lib/store';
 import { Radius, Space } from '../lib/theme';
@@ -29,6 +29,8 @@ export default function EventEditorScreen({ navigation, route }: any) {
   const [isOutdoor, setIsOutdoor] = useState(existing?.isOutdoor ?? false);
   const [kind, setKind] = useState<EventKind>(existing?.kind ?? preset.kind ?? 'meeting');
   const [calendarId, setCalendarId] = useState(existing?.calendarId ?? state.calendars[0]?.id ?? 'cal_personal');
+  const [reminderMin, setReminderMin] = useState<number>(existing?.reminderMinutesBefore ?? 30);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Best window calculation & confirmation states
   const [calculatingWindow, setCalculatingWindow] = useState(false);
@@ -132,6 +134,7 @@ export default function EventEditorScreen({ navigation, route }: any) {
       isOutdoor,
       kind,
       calendarId,
+      reminderMinutesBefore: reminderMin,
       source: existing?.source ?? ('local' as const),
     };
     if (existing) app.updateEvent(existing.id, payload);
@@ -144,9 +147,32 @@ export default function EventEditorScreen({ navigation, route }: any) {
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
         <IconBtn icon="close" onPress={() => navigation.goBack()} label="Cancel" />
         <Txt v="headline" w="700" style={{ flex: 1 }}>{existing ? 'Edit event' : 'New event'}</Txt>
-        {existing && <IconBtn icon="trash-outline" color={theme.danger} onPress={() => { app.deleteEvent(existing.id); navigation.goBack(); }} label="Delete event" />}
+        {existing && (
+          <IconBtn
+            icon="trash-outline"
+            color={theme.danger}
+            onPress={() => setConfirmDelete(true)}
+            label="Delete event"
+          />
+        )}
         <Btn title="Save" small onPress={save} />
       </View>
+
+      <ConfirmDialog
+        visible={confirmDelete}
+        title="Delete event?"
+        message={`Are you sure you want to delete\n'${existing?.title || 'this event'}'?`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => {
+          if (existing) {
+            app.deleteEvent(existing.id);
+          }
+          setConfirmDelete(false);
+          navigation.goBack();
+        }}
+      />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={{ padding: Space.lg, paddingBottom: 60 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -183,6 +209,32 @@ export default function EventEditorScreen({ navigation, route }: any) {
               </Field>
             </>
           )}
+
+          <Field label={`Reminder · ${reminderMin === 0 ? 'At start time' : `${reminderMin}m before`}`}>
+            <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+              {[
+                { m: 0, label: 'At start time' },
+                { m: 10, label: '10m before' },
+                { m: 30, label: '30m before' },
+                { m: 60, label: '1h before' },
+              ].map((opt) => (
+                <Touch key={opt.m} onPress={() => setReminderMin(opt.m)} scale={0.94}>
+                  <View
+                    style={{
+                      paddingHorizontal: 14,
+                      paddingVertical: 9,
+                      borderRadius: Radius.pill,
+                      backgroundColor: reminderMin === opt.m ? theme.accent : theme.surfaceAlt,
+                    }}
+                  >
+                    <Txt v="sub" w="600" c={reminderMin === opt.m ? theme.onAccent : theme.textSecondary}>
+                      {opt.label}
+                    </Txt>
+                  </View>
+                </Touch>
+              ))}
+            </View>
+          </Field>
 
           <Field label="Location">
             <TextInput

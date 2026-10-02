@@ -416,3 +416,31 @@ export async function fetchAllGoogleData(): Promise<{
   return { calendars, events, lists, tasks };
 }
 
+export async function deleteGoogleEvent(calendarId: string, eventId: string): Promise<boolean> {
+  const cleanCalId = calendarId.replace(/^gcal_/, '');
+  const cleanEventId = eventId.replace(/^gcal_/, '');
+  try {
+    const res = await googleFetch(`${CALENDAR_API_BASE}/calendars/${encodeURIComponent(cleanCalId)}/events/${encodeURIComponent(cleanEventId)}`, {
+      method: 'DELETE',
+    });
+    return res.ok || res.status === 404;
+  } catch (err) {
+    console.warn('Failed to delete Google Calendar event:', err);
+    return false;
+  }
+}
+
+export async function deleteGoogleTask(taskListId: string, taskId: string): Promise<boolean> {
+  const cleanListId = taskListId.replace(/^gtasklist_/, '');
+  const cleanTaskId = taskId.replace(/^gtask_/, '');
+  try {
+    const res = await googleFetch(`${TASKS_API_BASE}/lists/${encodeURIComponent(cleanListId)}/tasks/${encodeURIComponent(cleanTaskId)}`, {
+      method: 'DELETE',
+    });
+    return res.ok || res.status === 404;
+  } catch (err) {
+    console.warn('Failed to delete Google task:', err);
+    return false;
+  }
+}
+

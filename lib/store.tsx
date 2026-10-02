@@ -10,6 +10,8 @@ import { AppTheme, ColorScheme, getTheme } from './theme';
 import { dateKey, uid } from './utils';
 import { getValidAccessToken, getStoredGoogleUser, disconnectGoogleAccount, clearStoredGoogleTokens } from './googleAuth';
 import {
+  deleteGoogleEvent,
+  deleteGoogleTask,
   fetchAllGoogleData,
   fetchGoogleCalendarData,
   fetchGoogleTasksData,
@@ -22,6 +24,18 @@ import {
   signOutSupabase,
   exchangeSupabaseCode,
 } from './supabase';
+import {
+  initNotificationEngine,
+  scheduleTaskNotification,
+  cancelTaskNotification,
+  rescheduleTaskNotification,
+  scheduleEventNotification,
+  cancelEventNotification,
+  rescheduleEventNotification,
+  clearUserNotifications,
+  clearGoogleNotifications,
+  syncAllNotifications,
+} from './notifications';
 
 const KEY = '@weatherwhattodo/v1';
 
@@ -233,15 +247,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         } catch {}
 
-        // 1. Check if returning from Supabase OAuth with an authorization code
+        // 1. Check if returning from Supabase OAuth with an authorization code or error
         if (typeof window !== 'undefined' && window.location) {
           try {
             const url = new URL(window.location.href);
             const code = url.searchParams.get('code');
+            const urlErr =
+              url.searchParams.get('error_description') ||
+              url.searchParams.get('error') ||
+              url.searchParams.get('auth_error');
+
+            if (urlErr && window.sessionStorage) {
+              window.sessionStorage.setItem('@weatherwhattodo/auth_error', urlErr);
+            }
 
             if (isSupabaseConfigured() && code) {
-              const { session, error } = await exchangeSupabaseCode(code);
-              if (session?.user) {
+              const { session, error: exchangeErr } = await exchangeSupabaseCode(code);
+              if (exchangeErr) {
+                console.error('[Supabase OAuth Callback Error]:', exchangeErr);
+                if (window.sessionStorage) {
+                  window.sessionStorage.setItem(
+                    '@weatherwhattodo/auth_error',
+                    exchangeErr.message || 'Google sign-in could not be completed.'
+                  );
+                }
+              } else if (session?.user) {
+                if (window.sessionStorage) {
+                  window.sessionStorage.removeItem('@weatherwhattodo/auth_error');
+                }
                 const u = session.user;
                 const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
                 const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
@@ -351,6 +384,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     };
   }, []);
+
+  // Initialize notification background engine
+  useEffect(() => {
+    const cleanup = initNotificationEngine();
+    return cleanup;
+  }, []);
+
+  // Sync scheduled notifications with current user's tasks and events
+  useEffect(() => {
+    if (!ready) return;
+    const userId = state.user?.id || 'guest_user';
+    syncAllNotifications(state.tasks, state.events, userId, state.settings);
+  }, [ready, state.user?.id, state.tasks, state.events, state.settings.notifications]);
 
   useEffect(() => {
     if (!hydrated.current || typeof window === 'undefined') return;
@@ -565,6 +611,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
     },
     signOut: async () => {
+      const currentUserId = state.user?.id || 'guest_user';
+      clearUserNotifications(currentUserId);
       try {
         await signOutSupabase();
       } catch (err) {
@@ -594,12 +642,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addTask: (t) => {
       const task: Task = { id: t.id ?? uid('t'), createdAt: t.createdAt ?? Date.now(), ...t } as Task;
       dispatch({ type: 'patch', payload: { tasks: [task, ...state.tasks] } });
+      const userId = state.user?.id || 'guest_user';
+      scheduleTaskNotification(task, userId, state.settings);
       return task;
     },
-    updateTask: (id, p) => dispatch({ type: 'patch', payload: { tasks: state.tasks.map((t) => (t.id === id ? { ...t, ...p } : t)) } }),
+    updateTask: (id, p) => {
+      const nextTasks = state.tasks.map((t) => (t.id === id ? { ...t, ...p } : t));
+      dispatch({ type: 'patch', payload: { tasks: nextTasks } });
+      const updated = nextTasks.find((t) => t.id === id);
+      const userId = state.user?.id || 'guest_user';
+      if (updated) {
+        rescheduleTaskNotification(updated, userId, state.settings);
+      }
+    },
     toggleTask: (id) => {
       const t = state.tasks.find((x) => x.id === id);
       const nowDone = t ? !t.done : true;
+      const userId = state.user?.id || 'guest_user';
       dispatch({
         type: 'patch',
         payload: {
@@ -607,6 +666,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           stats: { ...state.stats, completedTotal: state.stats.completedTotal + (nowDone ? 1 : -1) },
         },
       });
+      if (nowDone) {
+        cancelTaskNotification(id, userId);
+      } else if (t) {
+        scheduleTaskNotification({ ...t, done: false }, userId, state.settings);
+      }
       // Synchronize completion status with Google Tasks API if it is a Google task
       if (t && t.source === 'google' && t.listId) {
         updateGoogleTaskStatus(t.listId, t.id, nowDone).catch((err) => {
@@ -614,7 +678,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
       }
     },
-    deleteTask: (id) => dispatch({ type: 'patch', payload: { tasks: state.tasks.filter((t) => t.id !== id) } }),
+    deleteTask: (id) => {
+      const task = state.tasks.find((t) => t.id === id);
+      const userId = state.user?.id || 'guest_user';
+      cancelTaskNotification(id, userId);
+      dispatch({ type: 'patch', payload: { tasks: state.tasks.filter((t) => t.id !== id) } });
+      if (task && task.source === 'google' && task.listId) {
+        deleteGoogleTask(task.listId, task.id).catch((err) => {
+          console.warn('Failed to sync task deletion to Google Tasks:', err);
+        });
+      }
+    },
     addList: (name, color, icon) => dispatch({ type: 'patch', payload: { lists: [...state.lists, { id: uid('l'), name, color, icon, source: 'local' }] } }),
     deleteList: (id) => dispatch({
       type: 'patch',
@@ -626,10 +700,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addEvent: (e) => {
       const ev: CalEvent = { id: e.id ?? uid('e'), ...e } as CalEvent;
       dispatch({ type: 'patch', payload: { events: [...state.events, ev] } });
+      const userId = state.user?.id || 'guest_user';
+      scheduleEventNotification(ev, userId, state.settings);
       return ev;
     },
-    updateEvent: (id, p) => dispatch({ type: 'patch', payload: { events: state.events.map((e) => (e.id === id ? { ...e, ...p } : e)) } }),
-    deleteEvent: (id) => dispatch({ type: 'patch', payload: { events: state.events.filter((e) => e.id !== id) } }),
+    updateEvent: (id, p) => {
+      const nextEvents = state.events.map((e) => (e.id === id ? { ...e, ...p } : e));
+      dispatch({ type: 'patch', payload: { events: nextEvents } });
+      const updated = nextEvents.find((e) => e.id === id);
+      const userId = state.user?.id || 'guest_user';
+      if (updated) {
+        rescheduleEventNotification(updated, userId, state.settings);
+      }
+    },
+    deleteEvent: (id) => {
+      const event = state.events.find((e) => e.id === id);
+      const userId = state.user?.id || 'guest_user';
+      cancelEventNotification(id, userId);
+      dispatch({ type: 'patch', payload: { events: state.events.filter((e) => e.id !== id) } });
+      if (event && event.source === 'google' && event.calendarId) {
+        deleteGoogleEvent(event.calendarId, event.id).catch((err) => {
+          console.warn('Failed to sync event deletion to Google Calendar:', err);
+        });
+      }
+    },
     toggleCalendar: (id) => dispatch({ type: 'patch', payload: { calendars: state.calendars.map((c) => (c.id === id ? { ...c, visible: !c.visible } : c)) } }),
     addReminder: (r) => dispatch({ type: 'patch', payload: { reminders: [{ id: uid('r'), createdAt: Date.now(), enabled: true, trigger: 'time' as const, repeat: 'none' as const, ...r }, ...state.reminders] } }),
     updateReminder: (id, p) => dispatch({ type: 'patch', payload: { reminders: state.reminders.map((r) => (r.id === id ? { ...r, ...p } : r)) } }),
@@ -800,6 +894,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     },
     disconnectGoogle: async () => {
+      const currentUserId = state.user?.id || 'guest_user';
+      clearGoogleNotifications(currentUserId);
       await disconnectGoogleAccount();
       dispatch({
         type: 'patch',
@@ -819,6 +915,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
     },
     clearGoogleData: () => {
+      const currentUserId = state.user?.id || 'guest_user';
+      clearGoogleNotifications(currentUserId);
       dispatch({
         type: 'patch',
         payload: {

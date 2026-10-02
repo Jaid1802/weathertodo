@@ -522,6 +522,78 @@ export function Sheet({
   );
 }
 
+/* ----------------------------- ConfirmDialog ----------------------------- */
+
+export function ConfirmDialog({
+  visible,
+  title,
+  message,
+  confirmLabel = 'Delete',
+  cancelLabel = 'Cancel',
+  confirmKind = 'danger',
+  onConfirm,
+  onCancel,
+}: {
+  visible: boolean;
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  confirmKind?: 'danger' | 'primary';
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { theme, state } = useApp();
+  const v = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(v, {
+      toValue: visible ? 1 : 0,
+      duration: state.settings.reduceMotion ? 0 : 200,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [visible, v, state.settings.reduceMotion]);
+
+  if (!visible) return null;
+
+  const scale = v.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onCancel} statusBarTranslucent>
+      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: theme.overlay, opacity: v, justifyContent: 'center', alignItems: 'center', padding: Space.xl, zIndex: 9999 }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onCancel} accessibilityLabel="Cancel" />
+        <Animated.View
+          style={{
+            width: '100%',
+            maxWidth: 340,
+            backgroundColor: theme.bgElevated,
+            borderRadius: Radius.xl,
+            padding: Space.xl,
+            transform: [{ scale }],
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: theme.hairline,
+            ...shadow(3, theme.shadow),
+          }}
+        >
+          <Txt v="headline" w="700" center style={{ marginBottom: 8 }}>{title}</Txt>
+          <Txt v="callout" c={theme.textSecondary} center style={{ lineHeight: 22, marginBottom: Space.xl }}>
+            {message}
+          </Txt>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <View style={{ flex: 1 }}>
+              <Btn title={cancelLabel} kind="secondary" full small onPress={onCancel} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Btn title={confirmLabel} kind={confirmKind} full small onPress={onConfirm} />
+            </View>
+          </View>
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
 /* -------------------------------- Badge ---------------------------------- */
 
 export function Badge({ label, color, bg, icon }: { label: string; color?: string; bg?: string; icon?: keyof typeof Ionicons.glyphMap }) {

@@ -1,16 +1,27 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Card, IconBtn, ListGroup, Row, Toggle, Touch, Txt } from '../components/ui';
+import { Btn, Card, IconBtn, ListGroup, Row, Toggle, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
 import { Radius, Space } from '../lib/theme';
 import { minutesToLabel } from '../lib/utils';
+import { getNotificationPermission, requestNotificationPermission } from '../lib/notifications';
 
 export default function NotificationsScreen({ navigation }: any) {
   const app = useApp();
   const { state, theme } = app;
   const n = state.settings.notifications;
+  const [permission, setPermission] = useState<'granted' | 'denied' | 'default' | 'unsupported'>('granted');
+
+  useEffect(() => {
+    setPermission(getNotificationPermission());
+  }, []);
+
+  const handleEnablePermissions = async () => {
+    const granted = await requestNotificationPermission();
+    setPermission(getNotificationPermission());
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
@@ -20,6 +31,32 @@ export default function NotificationsScreen({ navigation }: any) {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: Space.lg, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+        {permission !== 'granted' && permission !== 'unsupported' && (
+          <Card style={{ marginBottom: Space.lg, borderColor: permission === 'denied' ? theme.danger : theme.hairline }}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+              <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: permission === 'denied' ? 'rgba(229,72,77,0.14)' : theme.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name={permission === 'denied' ? 'notifications-off' : 'notifications'} size={20} color={permission === 'denied' ? theme.danger : theme.accent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Txt v="callout" w="700">Notifications are disabled</Txt>
+                <Txt v="sub" c={theme.textSecondary} style={{ marginTop: 2, marginBottom: permission === 'denied' ? 0 : 12 }}>
+                  {permission === 'denied'
+                    ? 'Browser notifications are blocked. Please allow notifications in your browser site permissions to receive alerts.'
+                    : 'System notifications are currently disabled. Enable them to receive reminders for upcoming tasks and calendar events.'}
+                </Txt>
+                {permission !== 'denied' && (
+                  <Btn
+                    title="Enable Notifications"
+                    icon="notifications-outline"
+                    kind="primary"
+                    small
+                    onPress={handleEnablePermissions}
+                  />
+                )}
+              </View>
+            </View>
+          </Card>
+        )}
         <Card style={{ marginBottom: Space.lg }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <View style={{ width: 44, height: 44, borderRadius: 15, backgroundColor: theme.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
