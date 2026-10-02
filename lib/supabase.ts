@@ -7,6 +7,8 @@ import * as AuthSession from 'expo-auth-session';
 // Complete any pending auth session in web browser if applicable
 WebBrowser.maybeCompleteAuthSession();
 
+const PRODUCTION_SITE_URL = 'https://weatherwhattodo.netlify.app';
+
 // Literal access for bundlers (Metro / Webpack / Next.js / Vite) with project fallback
 export const SUPABASE_URL: string =
   process.env.EXPO_PUBLIC_SUPABASE_URL ||
@@ -33,9 +35,22 @@ export function isSupabaseConfigured(): boolean {
   return SUPABASE_URL.startsWith('http://') || SUPABASE_URL.startsWith('https://');
 }
 
+const PRODUCTION_SITE_URL = 'https://weatherwhattodo.netlify.app';
+
 export function getPublicSiteUrl(): string {
+  // Never derive the production OAuth target from an old Netlify alias,
+  // preview URL, or another hostname. Local development may still use
+  // the current browser origin.
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
+    const hostname = window.location.hostname;
+    const isLocalhost =
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '[::1]';
+
+    if (isLocalhost) {
+      return window.location.origin;
+    }
   }
 
   const envUrl =
@@ -45,17 +60,16 @@ export function getPublicSiteUrl(): string {
     process.env.EXPO_PUBLIC_APP_URL;
 
   if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
-    return envUrl.trim().replace(/\/+$/, '');
+    const normalized = envUrl.trim().replace(/\/+$/, '');
+    // Production must stay on the canonical Netlify hostname.
+    if (normalized === PRODUCTION_SITE_URL) return normalized;
   }
 
-  return 'https://weatherwhattodo.netlify.app';
+  return PRODUCTION_SITE_URL;
 }
 
 export function getOAuthRedirectUrl(): string {
   if (Platform.OS === 'web') {
-    if (typeof window !== 'undefined' && window.location?.origin) {
-      return `${window.location.origin}/auth/callback`;
-    }
     return `${getPublicSiteUrl()}/auth/callback`;
   }
 
