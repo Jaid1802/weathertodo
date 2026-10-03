@@ -1,0 +1,22 @@
+{
+  "short_name": "WeatherTodo",
+  "name": "Weather What To-Do",
+  "description": "Weather-aware calendar, tasks, and smart daily suggestions",
+  "icons": [
+    {
+      "src": "/assets/icon.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/assets/icon.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0B1020",
+  "theme_color": "#3B82F6",
+  "display": "standalone",
+  "orientation": "portrait"
+}

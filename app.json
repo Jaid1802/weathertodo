@@ -33,7 +33,15 @@
       "web"
     ],
     "plugins": [
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#3B82F6",
+          "defaultChannel": "reminders"
+        }
+      ]
     ]
   }
 }

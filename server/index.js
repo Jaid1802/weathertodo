@@ -756,6 +756,85 @@ function parseRecommendationsResponse(raw) {
   }
 }
 
+// Web Push Notifications & VAPID Handling
+let webpush;
+try {
+  webpush = require('web-push');
+} catch (e) {
+  console.warn('[Push] web-push module not loaded:', e.message);
+}
+
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+let vapidKeys = {
+  publicKey: VAPID_PUBLIC_KEY,
+  privateKey: VAPID_PRIVATE_KEY,
+};
+
+if (webpush) {
+  if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
+    vapidKeys = webpush.generateVAPIDKeys();
+    console.log('[Push] Generated VAPID keys. For permanent keys, set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in .env');
+  }
+  webpush.setVapidDetails('mailto:support@weatherwhattodo.app', vapidKeys.publicKey, vapidKeys.privateKey);
+}
+
+// User-associated Push Subscriptions store: Map<userId, Map<endpoint, subscription>>
+const pushSubscriptions = new Map();
+
+app.get('/api/notifications/vapid-public-key', (req, res) => {
+  if (!vapidKeys.publicKey) {
+    return res.status(503).json({ error: 'Push service not available' });
+  }
+  res.json({ publicKey: vapidKeys.publicKey });
+});
+
+app.post('/api/notifications/subscribe', (req, res) => {
+  const { userId = 'guest_user', subscription } = req.body;
+  if (!subscription || !subscription.endpoint) {
+    return res.status(400).json({ error: 'Invalid subscription object' });
+  }
+  if (!pushSubscriptions.has(userId)) {
+    pushSubscriptions.set(userId, new Map());
+  }
+  pushSubscriptions.get(userId).set(subscription.endpoint, subscription);
+  console.log(`[Push] User ${userId} subscribed: ${subscription.endpoint.slice(0, 35)}...`);
+  res.json({ status: 'subscribed', userId });
+});
+
+app.post('/api/notifications/unsubscribe', (req, res) => {
+  const { userId = 'guest_user', endpoint } = req.body;
+  if (pushSubscriptions.has(userId) && endpoint) {
+    pushSubscriptions.get(userId).delete(endpoint);
+  }
+  res.json({ status: 'unsubscribed' });
+});
+
+app.post('/api/notifications/send-push', async (req, res) => {
+  const { userId = 'guest_user', title, body, data, tag } = req.body;
+  if (!webpush || !pushSubscriptions.has(userId)) {
+    return res.json({ sent: 0, reason: 'No subscriptions for user' });
+  }
+
+  const userSubs = pushSubscriptions.get(userId);
+  const payload = JSON.stringify({ title, body, data, tag });
+
+  let sent = 0;
+  for (const [endpoint, sub] of userSubs.entries()) {
+    try {
+      await webpush.sendNotification(sub, payload);
+      sent++;
+    } catch (err) {
+      console.warn(`[Push] Delivery error for ${endpoint.slice(0, 30)}:`, err.message);
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        userSubs.delete(endpoint);
+      }
+    }
+  }
+
+  res.json({ sent, total: userSubs.size });
+});
+
 // Fallback Route
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found', path: req.path });

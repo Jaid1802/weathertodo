@@ -1,5 +1,5 @@
 import React from 'react';
-import { ScrollView, View } from 'react-native';
+import { Image, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -27,8 +27,8 @@ export default function AboutScreen({ navigation }: any) {
       <ScrollView contentContainerStyle={{ padding: Space.lg, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
         <View style={{ borderRadius: Radius.xl, overflow: 'hidden', marginBottom: Space.lg }}>
           <LinearGradient colors={['#1D6FE0', '#7B5BFF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ padding: Space.xl, alignItems: 'center' }}>
-            <View style={{ width: 64, height: 64, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
-              <Ionicons name="partly-sunny" size={32} color="#fff" />
+            <View style={{ width: 68, height: 68, borderRadius: 22, overflow: 'hidden', marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 5 }}>
+              <Image source={require('../assets/icon.png')} style={{ width: 68, height: 68 }} resizeMode="cover" />
             </View>
             <Txt v="title2" w="700" c="#fff">Weather What To-Do</Txt>
             <Txt v="callout" c="rgba(255,255,255,0.82)" center style={{ marginTop: 6, lineHeight: 21 }}>

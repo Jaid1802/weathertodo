@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as WebBrowser from 'expo-web-browser';
@@ -173,8 +173,8 @@ export default function SignInScreen() {
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: Space.lg }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={{ alignItems: 'center', marginBottom: Space.xl }}>
-              <View style={{ width: 66, height: 66, borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.18)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
-                <Ionicons name="partly-sunny" size={32} color={onSky} />
+              <View style={{ width: 72, height: 72, borderRadius: 22, overflow: 'hidden', marginBottom: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 6 }}>
+                <Image source={require('../assets/icon.png')} style={{ width: 72, height: 72 }} resizeMode="cover" />
               </View>
               <Txt v="title1" w="700" c={onSky}>Weather What To-Do</Txt>
               <Txt v="callout" c={onSkyMuted} center style={{ marginTop: 6, maxWidth: 300, lineHeight: 21 }}>

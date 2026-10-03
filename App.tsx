@@ -14,6 +14,7 @@ import { useFonts } from 'expo-font';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { AppProvider, useApp } from './lib/store';
+import { navigationRef } from './lib/navigation';
 import TabBar from './components/TabBar';
 
 import HomeScreen from './screens/HomeScreen';
@@ -77,7 +78,7 @@ function Root() {
   }
 
   return (
-    <NavigationContainer theme={navTheme as any}>
+    <NavigationContainer ref={navigationRef} theme={navTheme as any}>
       <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       <Stack.Navigator
         screenOptions={{

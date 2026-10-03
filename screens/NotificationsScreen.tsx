@@ -6,7 +6,7 @@ import { Btn, Card, IconBtn, ListGroup, Row, Toggle, Touch, Txt } from '../compo
 import { useApp } from '../lib/store';
 import { Radius, Space } from '../lib/theme';
 import { minutesToLabel } from '../lib/utils';
-import { getNotificationPermission, requestNotificationPermission } from '../lib/notifications';
+import { getNotificationPermissionAsync, requestNotificationPermission, sendTestNotification } from '../lib/notifications';
 
 export default function NotificationsScreen({ navigation }: any) {
   const app = useApp();
@@ -15,12 +15,17 @@ export default function NotificationsScreen({ navigation }: any) {
   const [permission, setPermission] = useState<'granted' | 'denied' | 'default' | 'unsupported'>('granted');
 
   useEffect(() => {
-    setPermission(getNotificationPermission());
+    getNotificationPermissionAsync().then((p) => setPermission(p));
   }, []);
 
   const handleEnablePermissions = async () => {
     const granted = await requestNotificationPermission();
-    setPermission(getNotificationPermission());
+    const updated = await getNotificationPermissionAsync();
+    setPermission(updated);
+  };
+
+  const handleTestNotification = async () => {
+    await sendTestNotification();
   };
 
   return (
@@ -31,18 +36,39 @@ export default function NotificationsScreen({ navigation }: any) {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: Space.lg, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
-        {permission !== 'granted' && permission !== 'unsupported' && (
+        {permission === 'granted' ? (
+          <Card style={{ marginBottom: Space.lg, borderColor: theme.hairline }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: 'rgba(52, 199, 89, 0.14)', alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="checkmark-circle" size={22} color="#34C759" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Txt v="callout" w="700">Notifications Enabled</Txt>
+                <Txt v="sub" c={theme.textSecondary} style={{ marginTop: 2 }}>
+                  System notifications are active for upcoming tasks and calendar events.
+                </Txt>
+              </View>
+              <Btn
+                title="Test"
+                icon="paper-plane-outline"
+                kind="secondary"
+                small
+                onPress={handleTestNotification}
+              />
+            </View>
+          </Card>
+        ) : (
           <Card style={{ marginBottom: Space.lg, borderColor: permission === 'denied' ? theme.danger : theme.hairline }}>
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
               <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: permission === 'denied' ? 'rgba(229,72,77,0.14)' : theme.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
                 <Ionicons name={permission === 'denied' ? 'notifications-off' : 'notifications'} size={20} color={permission === 'denied' ? theme.danger : theme.accent} />
               </View>
               <View style={{ flex: 1 }}>
-                <Txt v="callout" w="700">Notifications are disabled</Txt>
+                <Txt v="callout" w="700">Notifications Disabled</Txt>
                 <Txt v="sub" c={theme.textSecondary} style={{ marginTop: 2, marginBottom: permission === 'denied' ? 0 : 12 }}>
                   {permission === 'denied'
-                    ? 'Browser notifications are blocked. Please allow notifications in your browser site permissions to receive alerts.'
-                    : 'System notifications are currently disabled. Enable them to receive reminders for upcoming tasks and calendar events.'}
+                    ? 'Device notifications are blocked. Please allow notifications in system/browser site settings to receive reminders.'
+                    : 'Enable notifications to receive task and event reminders.'}
                 </Txt>
                 {permission !== 'denied' && (
                   <Btn
@@ -115,7 +141,7 @@ export default function NotificationsScreen({ navigation }: any) {
           <Row
             icon="calendar-outline"
             title="Event alerts"
-            subtitle="10 minutes before each event"
+            subtitle="30 minutes before each event"
             right={<Toggle value={n.eventAlerts} onChange={(v) => app.setNotifications({ eventAlerts: v })} />}
             last
           />
