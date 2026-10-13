@@ -7,6 +7,7 @@ import { Badge, Btn, Card, EmptyState, IconBtn, Touch, Txt } from '../components
 import { useApp } from '../lib/store';
 import { Radius, Space } from '../lib/theme';
 import { DEFAULT_PLACES, Place, condition, fmtTemp, reverseGeocode, searchPlaces } from '../lib/weather';
+import { resolveCurrentDevicePlace, openDeviceLocationSettings } from '../lib/locationService';
 
 export default function LocationsScreen({ navigation }: any) {
   const app = useApp();
@@ -36,50 +37,25 @@ export default function LocationsScreen({ navigation }: any) {
     return () => clearTimeout(t);
   }, [query]);
 
+  const [permissionDenied, setPermissionDenied] = useState(false);
+
   const useCurrentLocation = useCallback(async () => {
     setLocating(true);
     setError(null);
+    setPermissionDenied(false);
     try {
-      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          async (pos) => {
-            try {
-              const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-              app.addPlace({ ...place, id: 'current' });
-              app.setActivePlace('current');
-              setLocating(false);
-              navigation.goBack();
-            } catch (e) {
-              setError('Could not determine your location. Try searching instead.');
-              setLocating(false);
-            }
-          },
-          (err) => {
-            if (err.code === 1) {
-              setError('Location permission denied. Search for a city instead.');
-            } else {
-              setError('Could not determine your location. Try searching instead.');
-            }
-            setLocating(false);
-          },
-          { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
-        );
-        return;
+      const res = await resolveCurrentDevicePlace(true);
+      if (res.place) {
+        app.addPlace(res.place);
+        app.setActivePlace('current');
+        navigation.goBack();
+      } else if (res.status === 'denied') {
+        setPermissionDenied(true);
+        setError(res.errorMessage || 'Location permission denied. Enable location in Device Settings or search for a city below.');
+      } else {
+        setError(res.errorMessage || 'Could not determine your location. Try searching for a city instead.');
       }
-
-      const Location = await import('expo-location');
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setError('Location permission denied. Search for a city instead.');
-        setLocating(false);
-        return;
-      }
-      const pos = await Location.getCurrentPositionAsync({});
-      const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-      app.addPlace({ ...place, id: 'current' });
-      app.setActivePlace('current');
-      navigation.goBack();
-    } catch (e) {
+    } catch {
       setError('Could not determine your location. Try searching instead.');
     } finally {
       setLocating(false);
@@ -214,7 +190,31 @@ export default function LocationsScreen({ navigation }: any) {
                   loading={locating}
                   onPress={useCurrentLocation}
                 />
-                {error ? <Txt v="micro" c={theme.danger} style={{ marginTop: 8, marginLeft: 4 }}>{error}</Txt> : null}
+                {error ? (
+                  <View style={{ marginTop: 10, padding: 12, backgroundColor: theme.surfaceAlt, borderRadius: Radius.md, borderWidth: 1, borderColor: theme.hairline }}>
+                    <Txt v="sub" c={theme.danger} style={{ lineHeight: 18 }}>{error}</Txt>
+                    {permissionDenied ? (
+                      <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                        {Platform.OS !== 'web' ? (
+                          <Btn
+                            title="Open Settings"
+                            kind="secondary"
+                            small
+                            icon="settings-outline"
+                            onPress={openDeviceLocationSettings}
+                          />
+                        ) : null}
+                        <Btn
+                          title="Try again"
+                          kind="primary"
+                          small
+                          icon="refresh-outline"
+                          onPress={useCurrentLocation}
+                        />
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
                 <Txt v="caption" c={theme.textTertiary} w="700" style={{ marginTop: Space.lg, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 }}>Saved locations</Txt>
               </View>
             )}

@@ -139,6 +139,7 @@ export default function HomeScreen({ navigation }: any) {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.allSettled([
+      app.refreshCurrentLocation ? app.refreshCurrentLocation(false) : Promise.resolve(),
       refreshWeather(true),
       app.syncGoogleData(),
     ]);

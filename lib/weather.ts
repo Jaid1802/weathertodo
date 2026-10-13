@@ -131,8 +131,8 @@ export const DEFAULT_PLACES: Place[] = [
 export const DEFAULT_PLACE: Place = {
   id: 'current',
   name: 'Current location',
-  lat: 12.9716,
-  lon: 77.5946,
+  lat: 0,
+  lon: 0,
 };
 
 /* ---------------------------- unit helpers ---------------------------- */

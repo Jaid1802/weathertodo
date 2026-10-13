@@ -9,6 +9,12 @@ import { seedCalendars, seedEvents, seedLists, seedReminders, seedTasks } from '
 import { DEFAULT_PLACES, Place, WeatherBundle, fetchWeather, synthesize, reverseGeocode } from './weather';
 import { AppTheme, ColorScheme, getTheme } from './theme';
 import { dateKey, uid } from './utils';
+import {
+  checkLocationPermission,
+  resolveCurrentDevicePlace,
+  getLastKnownPlace,
+  LocationPermissionState,
+} from './locationService';
 import { getValidAccessToken, getStoredGoogleUser, disconnectGoogleAccount, clearStoredGoogleTokens } from './googleAuth';
 import {
   deleteGoogleEvent,
@@ -142,7 +148,7 @@ function defaultState(): PersistShape {
       account: undefined,
     },
     chat: [],
-    onboarded: true,
+    onboarded: false,
     stats: { streak: 0, lastActive: dateKey(new Date()), completedTotal: 0, plansMade: 0 },
   };
 }
@@ -349,6 +355,12 @@ export interface Ctx {
   removePlace: (id: string) => void;
   setActivePlace: (idOrPlace: string | Place) => void;
   reorderPlace: (id: string, dir: -1 | 1) => void;
+  refreshCurrentLocation: (requestPermission?: boolean) => Promise<{
+    place: Place | null;
+    status: LocationPermissionState;
+    canAskAgain: boolean;
+    errorMessage?: string;
+  }>;
   // integrations
   setIntegrations: (p: Partial<IntegrationState>) => void;
   syncCalendar: (force?: boolean) => Promise<void>;
@@ -688,6 +700,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           initialPersist.onboarded = true;
         }
 
+        // If places are empty, check if we have a saved last-known device place
+        if (initialPersist.places.length === 0) {
+          try {
+            const savedLastPlace = await getLastKnownPlace();
+            if (savedLastPlace) {
+              initialPersist.places = [savedLastPlace];
+              initialPersist.activePlaceId = 'current';
+            }
+          } catch {}
+        }
+
         if (mounted) {
           dispatch({ type: 'hydrate', payload: initialPersist });
           hydrated.current = true;
@@ -697,8 +720,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             if (cachedWeather && typeof cachedWeather === 'object') {
               setWeatherByPlace(cachedWeather);
               const activeId = initialPersist.activePlaceId;
-              const place = initialPersist.places.find((p) => p.id === activeId) ?? initialPersist.places[0] ?? DEFAULT_PLACES[0];
-              if (cachedWeather[place.id]) {
+              const place = initialPersist.places.find((p) => p.id === activeId) ?? initialPersist.places[0];
+              if (place && cachedWeather[place.id]) {
                 setWeather(cachedWeather[place.id]);
                 setWeatherLoading(false);
               }
@@ -849,13 +872,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(id);
   }, [state]);
 
+  const fallbackPlace: Place = useMemo(() => ({
+    id: 'current',
+    name: 'Current location',
+    lat: 0,
+    lon: 0,
+  }), []);
+
   const activePlace = useMemo(
-    () => state.places.find((p) => p.id === state.activePlaceId) ?? state.places[0] ?? DEFAULT_PLACES[0],
-    [state.places, state.activePlaceId]
+    () => state.places.find((p) => p.id === state.activePlaceId) ?? state.places[0] ?? fallbackPlace,
+    [state.places, state.activePlaceId, fallbackPlace]
   );
 
   const refreshWeather = useCallback(async (force = false) => {
-    const place = state.places.find((p) => p.id === state.activePlaceId) ?? state.places[0] ?? DEFAULT_PLACES[0];
+    const place = state.places.find((p) => p.id === state.activePlaceId) ?? state.places[0];
+    if (!place || (place.lat === 0 && place.lon === 0)) {
+      setWeatherLoading(false);
+      return;
+    }
     const cached = weatherByPlace[place.id];
     if (!force && cached && Date.now() - cached.fetchedAt < 1000 * 60 * 10) {
       setWeather(cached);
@@ -900,102 +934,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, [weatherByPlace]);
 
-  // Persistent location handling on startup:
-  // If user already has a saved place, use it without re-prompting for GPS or resolving coordinates unnecessarily.
-  // Only on first launch (no saved places): determine initial location once.
+  // Persistent device location handling:
+  // 1. If user already has a saved place, use it immediately as temporary fallback.
+  // 2. On mount, if location permission is already granted, refresh the device's actual current location
+  //    and weather in the background without prompting the user.
+  // 3. Never hardcode a fixed city or show repeated unprovoked permission dialogs.
   useEffect(() => {
     if (!ready) return;
-    if (state.places.length > 0) return;
 
-    if (Platform.OS === 'web') {
-      if (typeof navigator !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          async (pos) => {
-            try {
-              const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-              const currentPlace: Place = { ...place, id: 'current' };
-              dispatch({
-                type: 'patch',
-                payload: {
-                  places: [currentPlace],
-                  activePlaceId: 'current',
-                },
-              });
-            } catch {
-              dispatch({
-                type: 'patch',
-                payload: {
-                  places: [DEFAULT_PLACES[0]],
-                  activePlaceId: DEFAULT_PLACES[0].id,
-                },
-              });
-            }
-          },
-          () => {
-            // Permission denied: retain default place without crashing
+    (async () => {
+      try {
+        const { status } = await checkLocationPermission();
+        if (status === 'granted') {
+          const res = await resolveCurrentDevicePlace(false);
+          if (res.place) {
+            const others = state.places.filter((p) => p.id !== 'current');
             dispatch({
               type: 'patch',
               payload: {
-                places: [DEFAULT_PLACES[0]],
-                activePlaceId: DEFAULT_PLACES[0].id,
-              },
-            });
-          },
-          { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
-        );
-      } else {
-        dispatch({
-          type: 'patch',
-          payload: {
-            places: [DEFAULT_PLACES[0]],
-            activePlaceId: DEFAULT_PLACES[0].id,
-          },
-        });
-      }
-    } else {
-      // Native Android / iOS
-      (async () => {
-        try {
-          const Location = await import('expo-location');
-          const perm = await Location.getForegroundPermissionsAsync();
-          let granted = perm.status === 'granted';
-          if (perm.status === 'undetermined') {
-            const req = await Location.requestForegroundPermissionsAsync();
-            granted = req.status === 'granted';
-          }
-          if (granted) {
-            const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-            const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-            const currentPlace: Place = { ...place, id: 'current' };
-            dispatch({
-              type: 'patch',
-              payload: {
-                places: [currentPlace],
-                activePlaceId: 'current',
-              },
-            });
-          } else {
-            // Permission denied: retain default place
-            dispatch({
-              type: 'patch',
-              payload: {
-                places: [DEFAULT_PLACES[0]],
-                activePlaceId: DEFAULT_PLACES[0].id,
+                places: [res.place, ...others],
+                activePlaceId: state.activePlaceId === 'current' || state.places.length === 0 ? 'current' : state.activePlaceId,
               },
             });
           }
-        } catch {
-          dispatch({
-            type: 'patch',
-            payload: {
-              places: [DEFAULT_PLACES[0]],
-              activePlaceId: DEFAULT_PLACES[0].id,
-            },
-          });
         }
-      })();
-    }
-  }, [ready, state.places.length]);
+      } catch (err) {
+        console.warn('[Store] Background location refresh error:', err);
+      }
+    })();
+  }, [ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -1493,7 +1460,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const next = state.places.filter((p) => p.id !== id);
       dispatch({
         type: 'patch',
-        payload: { places: next, activePlaceId: state.activePlaceId === id ? next[0]?.id ?? DEFAULT_PLACES[0].id : state.activePlaceId },
+        payload: { places: next, activePlaceId: state.activePlaceId === id ? (next[0]?.id ?? 'current') : state.activePlaceId },
       });
       if (state.user?.id && state.user.id !== 'guest_user') {
         deletePlaceFromCloud(id, state.user.id).catch(() => {});
@@ -1510,6 +1477,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (i < 0 || j < 0 || j >= arr.length) return;
       [arr[i], arr[j]] = [arr[j], arr[i]];
       dispatch({ type: 'patch', payload: { places: arr } });
+    },
+    refreshCurrentLocation: async (requestPermission = false) => {
+      const res = await resolveCurrentDevicePlace(requestPermission);
+      if (res.place) {
+        const others = state.places.filter((p) => p.id !== 'current');
+        dispatch({
+          type: 'patch',
+          payload: {
+            places: [res.place, ...others],
+            activePlaceId: 'current',
+          },
+        });
+        if (state.user?.id && state.user.id !== 'guest_user') {
+          savePlaceToCloud(res.place, state.user.id, 0).catch(() => {});
+        }
+      }
+      return res;
     },
     setIntegrations: (p: Partial<IntegrationState>) =>
       dispatch({ type: 'patch', payload: { integrations: { ...state.integrations, ...p } } }),
