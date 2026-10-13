@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CalEvent, Settings, Task } from './types';
 import { dateKey, minutesToLabel } from './utils';
 import { navigateToNotification, NotificationPayloadData } from './navigation';
@@ -26,6 +27,9 @@ let memoryStore: ScheduledNotification[] = [];
 let initialized = false;
 let checkInterval: any = null;
 let nativeResponseSubscription: any = null;
+let androidChannelReady = false;
+let isHydrated = false;
+let hydrationPromise: Promise<void> | null = null;
 
 // Configure default notification presentation behavior for native (foreground alerts)
 if (Platform.OS !== 'web') {
@@ -36,6 +40,7 @@ if (Platform.OS !== 'web') {
         shouldSetBadge: true,
         shouldShowBanner: true,
         shouldShowList: true,
+        priority: Notifications.AndroidNotificationPriority.MAX,
       }),
     });
   } catch (err) {
@@ -43,9 +48,65 @@ if (Platform.OS !== 'web') {
   }
 }
 
+/** Ensure the Android high-priority notification channel is registered */
+export async function ensureAndroidChannel(): Promise<void> {
+  if (Platform.OS === 'android') {
+    try {
+      await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
+        name: 'Task & Event Reminders',
+        description: 'Notifications and reminders for upcoming tasks, calendar events, and weather updates',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#3B82F6',
+        sound: 'default',
+        enableVibrate: true,
+        enableLights: true,
+        showBadge: true,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        bypassDnd: false,
+      });
+      androidChannelReady = true;
+    } catch (e) {
+      console.warn('[Notifications] Failed to ensure Android channel:', e);
+    }
+  }
+}
+
 /* ========================================================================== */
 /*                                PERSISTENCE                                 */
 /* ========================================================================== */
+
+/** Ensure memoryStore is hydrated from persistent storage */
+export async function ensureNotificationsHydrated(): Promise<void> {
+  if (isHydrated) return;
+  if (!hydrationPromise) {
+    hydrationPromise = (async () => {
+      if (Platform.OS === 'web') {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          try {
+            const raw = window.localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+              memoryStore = JSON.parse(raw);
+            }
+          } catch (e) {
+            console.warn('[Notifications] Web storage load error:', e);
+          }
+        }
+      } else {
+        try {
+          const raw = await AsyncStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            memoryStore = JSON.parse(raw);
+          }
+        } catch (e) {
+          console.warn('[Notifications] Native storage hydrate error:', e);
+        }
+      }
+      isHydrated = true;
+    })();
+  }
+  return hydrationPromise;
+}
 
 function loadStoredNotifications(): ScheduledNotification[] {
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
@@ -70,6 +131,10 @@ function saveStoredNotifications(list: ScheduledNotification[]): void {
     } catch (e) {
       console.warn('[Notifications] Failed to persist notifications:', e);
     }
+  } else if (Platform.OS !== 'web') {
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(list)).catch((e) => {
+      console.warn('[Notifications] Failed to persist notifications to AsyncStorage:', e);
+    });
   }
 }
 
@@ -99,6 +164,11 @@ export function parseDateTimeToMs(dateStr: string, minutes: number): number {
 /*                           PERMISSIONS & CHANNELS                           */
 /* ========================================================================== */
 
+export interface PermissionDetails {
+  status: 'granted' | 'denied' | 'default' | 'unsupported';
+  canAskAgain: boolean;
+}
+
 /** Check platform notification permission */
 export async function getNotificationPermissionAsync(): Promise<'granted' | 'denied' | 'default' | 'unsupported'> {
   if (Platform.OS === 'web') {
@@ -109,12 +179,38 @@ export async function getNotificationPermissionAsync(): Promise<'granted' | 'den
   }
 
   try {
-    const { status } = await Notifications.getPermissionsAsync();
-    if (status === 'granted') return 'granted';
-    if (status === 'denied') return 'denied';
+    const settings = await Notifications.getPermissionsAsync();
+    if (settings.granted || settings.status === 'granted') return 'granted';
+    if (settings.status === 'denied') return 'denied';
     return 'default';
   } catch {
     return 'default';
+  }
+}
+
+/** Fetch detailed permission status including canAskAgain */
+export async function getNotificationPermissionDetails(): Promise<PermissionDetails> {
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      const p = window.Notification.permission;
+      return { status: p as any, canAskAgain: p !== 'denied' };
+    }
+    return { status: 'unsupported', canAskAgain: false };
+  }
+
+  try {
+    const settings = await Notifications.getPermissionsAsync();
+    const status = (settings.granted || settings.status === 'granted')
+      ? 'granted'
+      : settings.status === 'denied'
+      ? 'denied'
+      : 'default';
+    return {
+      status,
+      canAskAgain: settings.canAskAgain ?? (status !== 'denied'),
+    };
+  } catch {
+    return { status: 'default', canAskAgain: true };
   }
 }
 
@@ -147,31 +243,22 @@ export async function requestNotificationPermission(): Promise<boolean> {
 
   try {
     // Setup Android notification channel first
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
-        name: 'Task & Event Reminders',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#3B82F6',
-        sound: 'default',
-        enableVibrate: true,
-        enableLights: true,
-      });
+    await ensureAndroidChannel();
+
+    const existing = await Notifications.getPermissionsAsync();
+    if (existing.granted || existing.status === 'granted') {
+      return true;
     }
 
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
-    if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync({
-        ios: {
-          allowAlert: true,
-          allowBadge: true,
-          allowSound: true,
-        },
-      });
-      finalStatus = status;
-    }
-    return finalStatus === 'granted';
+    const { status, granted } = await Notifications.requestPermissionsAsync({
+      ios: {
+        allowAlert: true,
+        allowBadge: true,
+        allowSound: true,
+      },
+    });
+
+    return Boolean(granted || status === 'granted');
   } catch (err) {
     console.warn('[Notifications] Failed to request permissions:', err);
     return false;
@@ -288,14 +375,17 @@ export async function firePlatformNotification(
     }
   } else if (Platform.OS !== 'web') {
     try {
+      await ensureAndroidChannel();
       await Notifications.scheduleNotificationAsync({
         content: {
           title,
           body,
           data: payloadData,
           sound: 'default',
+          color: '#3B82F6',
+          vibrate: [0, 250, 250, 250],
         },
-        trigger: null, // trigger immediately
+        trigger: Platform.OS === 'android' ? { channelId: ANDROID_CHANNEL_ID } : null,
       });
     } catch (err) {
       console.warn('[Notifications] Native fire failed:', err);
@@ -378,16 +468,16 @@ export function initNotificationEngine(): () => void {
     // Native Expo Notifications setup
     (async () => {
       try {
-        if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
-            name: 'Task & Event Reminders',
-            importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: '#3B82F6',
-            sound: 'default',
-            enableVibrate: true,
-            enableLights: true,
-          });
+        await ensureAndroidChannel();
+
+        // Hydrate from AsyncStorage on native
+        try {
+          const raw = await AsyncStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            memoryStore = JSON.parse(raw);
+          }
+        } catch (storageErr) {
+          console.warn('[Notifications] Native storage hydrate error:', storageErr);
         }
 
         // Listen for notification responses (user tapping on notification)
@@ -438,6 +528,8 @@ export async function scheduleTaskNotification(
   userId: string,
   settings: Settings
 ): Promise<ScheduledNotification | null> {
+  await ensureNotificationsHydrated();
+
   // Respect user settings
   if (!settings.notifications.taskReminders) {
     return null;
@@ -504,6 +596,7 @@ export async function scheduleTaskNotification(
   // Schedule on Native OS if on native platform
   if (Platform.OS !== 'web') {
     try {
+      await ensureAndroidChannel();
       await Notifications.scheduleNotificationAsync({
         identifier: stableId,
         content: {
@@ -511,6 +604,8 @@ export async function scheduleTaskNotification(
           body,
           data: payloadData,
           sound: 'default',
+          color: '#3B82F6',
+          vibrate: [0, 250, 250, 250],
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
@@ -536,6 +631,7 @@ export async function scheduleTaskNotification(
  * Cancel pending notifications for a specific task
  */
 export async function cancelTaskNotification(taskId: string, userId?: string): Promise<void> {
+  await ensureNotificationsHydrated();
   const list = loadStoredNotifications();
   const toCancel = list.filter((n) => {
     if (n.targetId !== taskId || n.type !== 'task') return false;
@@ -550,6 +646,17 @@ export async function cancelTaskNotification(taskId: string, userId?: string): P
         await Notifications.cancelScheduledNotificationAsync(item.id);
       } catch {}
     }
+    // Also cancel any matching scheduled alarms by identifier pattern
+    try {
+      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+      for (const req of scheduled) {
+        if (req.identifier === taskId || req.identifier.includes(`_task_${taskId}_`)) {
+          if (!userId || req.identifier.startsWith(`${userId}_`)) {
+            await Notifications.cancelScheduledNotificationAsync(req.identifier);
+          }
+        }
+      }
+    } catch {}
   }
 
   const next = list.filter((n) => !toCancel.some((c) => c.id === n.id));
@@ -583,6 +690,8 @@ export async function scheduleEventNotification(
   userId: string,
   settings: Settings
 ): Promise<ScheduledNotification | null> {
+  await ensureNotificationsHydrated();
+
   // Respect user settings
   if (!settings.notifications.eventAlerts) {
     return null;
@@ -660,6 +769,7 @@ export async function scheduleEventNotification(
   // Schedule on Native OS if on native platform
   if (Platform.OS !== 'web') {
     try {
+      await ensureAndroidChannel();
       await Notifications.scheduleNotificationAsync({
         identifier: stableId,
         content: {
@@ -667,6 +777,8 @@ export async function scheduleEventNotification(
           body,
           data: payloadData,
           sound: 'default',
+          color: '#3B82F6',
+          vibrate: [0, 250, 250, 250],
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
@@ -691,6 +803,7 @@ export async function scheduleEventNotification(
  * Cancel pending notifications for a specific event
  */
 export async function cancelEventNotification(eventId: string, userId?: string): Promise<void> {
+  await ensureNotificationsHydrated();
   const list = loadStoredNotifications();
   const toCancel = list.filter((n) => {
     if (n.targetId !== eventId || n.type !== 'event') return false;
@@ -704,6 +817,17 @@ export async function cancelEventNotification(eventId: string, userId?: string):
         await Notifications.cancelScheduledNotificationAsync(item.id);
       } catch {}
     }
+    // Also cancel any matching scheduled alarms by identifier pattern
+    try {
+      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+      for (const req of scheduled) {
+        if (req.identifier === eventId || req.identifier.includes(`_event_${eventId}_`)) {
+          if (!userId || req.identifier.startsWith(`${userId}_`)) {
+            await Notifications.cancelScheduledNotificationAsync(req.identifier);
+          }
+        }
+      }
+    } catch {}
   }
 
   const next = list.filter((n) => !toCancel.some((c) => c.id === n.id));
@@ -790,6 +914,7 @@ export async function scheduleDailyTaskSummary(
 
   if (Platform.OS !== 'web') {
     try {
+      await ensureAndroidChannel();
       await Notifications.scheduleNotificationAsync({
         identifier: stableId,
         content: {
@@ -860,6 +985,13 @@ export async function scheduleOverdueTaskSummary(
         return null; // Already notified today
       }
     } catch {}
+  } else if (Platform.OS !== 'web') {
+    try {
+      const lastSent = await AsyncStorage.getItem(`${OVERDUE_SENT_KEY}_${userId}`);
+      if (lastSent === todayKey) {
+        return null;
+      }
+    } catch {}
   }
 
   const title = 'Tasks need attention';
@@ -887,6 +1019,7 @@ export async function scheduleOverdueTaskSummary(
 
   if (Platform.OS !== 'web') {
     try {
+      await ensureAndroidChannel();
       await Notifications.scheduleNotificationAsync({
         identifier: stableId,
         content: {
@@ -910,6 +1043,8 @@ export async function scheduleOverdueTaskSummary(
     try {
       window.localStorage.setItem(`${OVERDUE_SENT_KEY}_${userId}`, todayKey);
     } catch {}
+  } else if (Platform.OS !== 'web') {
+    AsyncStorage.setItem(`${OVERDUE_SENT_KEY}_${userId}`, todayKey).catch(() => {});
   }
 
   const list = loadStoredNotifications();
@@ -929,6 +1064,7 @@ export async function scheduleOverdueTaskSummary(
  * Ensures User A's notifications never appear for User B.
  */
 export async function clearUserNotifications(userId: string): Promise<void> {
+  await ensureNotificationsHydrated();
   const list = loadStoredNotifications();
   const userItems = list.filter((n) => n.userId === userId);
 
@@ -938,6 +1074,15 @@ export async function clearUserNotifications(userId: string): Promise<void> {
         await Notifications.cancelScheduledNotificationAsync(item.id);
       } catch {}
     }
+    // Also cancel any scheduled alarms for this user from native OS
+    try {
+      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+      for (const req of scheduled) {
+        if (req.identifier.startsWith(`${userId}_`)) {
+          await Notifications.cancelScheduledNotificationAsync(req.identifier);
+        }
+      }
+    } catch {}
   }
 
   const next = list.filter((n) => n.userId !== userId);
@@ -949,6 +1094,7 @@ export async function clearUserNotifications(userId: string): Promise<void> {
  * Local notifications remain completely intact.
  */
 export async function clearGoogleNotifications(userId: string): Promise<void> {
+  await ensureNotificationsHydrated();
   const list = loadStoredNotifications();
   const googleItems = list.filter((n) => {
     if (n.userId !== userId) return false;
@@ -961,6 +1107,14 @@ export async function clearGoogleNotifications(userId: string): Promise<void> {
         await Notifications.cancelScheduledNotificationAsync(item.id);
       } catch {}
     }
+    try {
+      const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+      for (const req of scheduled) {
+        if (req.identifier.startsWith(`${userId}_`) && (req.identifier.includes('_gcal_') || req.identifier.includes('_gtask_'))) {
+          await Notifications.cancelScheduledNotificationAsync(req.identifier);
+        }
+      }
+    } catch {}
   }
 
   const next = list.filter((n) => !googleItems.some((g) => g.id === n.id));
@@ -982,13 +1136,15 @@ export async function syncAllNotifications(
   userId: string,
   settings: Settings
 ): Promise<void> {
+  await ensureNotificationsHydrated();
   const validTaskIds = new Set(tasks.map((t) => t.id));
   const validEventIds = new Set(events.map((e) => e.id));
 
-  // 1. Remove orphan notifications for deleted tasks or events
+  // 1. Remove orphan notifications for deleted tasks or events, or previous users
   const list = loadStoredNotifications();
   const orphans = list.filter((n) => {
-    if (n.userId !== userId) return false;
+    // Purge notifications from different users to guarantee strict user isolation
+    if (n.userId !== userId) return true;
     if (n.type === 'task' && !validTaskIds.has(n.targetId)) return true;
     if (n.type === 'event' && !validEventIds.has(n.targetId)) return true;
     return false;

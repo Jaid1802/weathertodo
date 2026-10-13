@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as WebBrowser from 'expo-web-browser';
 import WeatherBackground from '../components/WeatherBackground';
@@ -31,9 +32,9 @@ export default function SignInScreen() {
   const onSky = sky.onSky;
   const onSkyMuted = sky.onSkyMuted;
 
-  // Check URL parameters and sessionStorage for OAuth error upon mount
+  // Check URL parameters and sessionStorage for OAuth error upon mount (Web only)
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
       try {
         let err: string | null = null;
         if (window.location) {
@@ -47,7 +48,9 @@ export default function SignInScreen() {
             url.searchParams.delete('error');
             url.searchParams.delete('error_description');
             url.searchParams.delete('auth_error');
-            window.history.replaceState({}, document.title, url.pathname);
+            if (typeof document !== 'undefined') {
+              window.history.replaceState({}, document.title, url.pathname);
+            }
           }
         }
 
@@ -134,10 +137,8 @@ export default function SignInScreen() {
         }
       }
     } catch (err: any) {
-      console.warn('Sign-in error, using local fallback:', err?.message || err);
-      // Fallback to local session
-      await new Promise((r) => setTimeout(r, 600));
-      app.signIn(email.trim().toLowerCase(), mode === 'up' ? name.trim() : undefined, 'email');
+      console.warn('Sign-in error:', err?.message || err);
+      setError(err?.message || 'Authentication error. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -157,6 +158,11 @@ export default function SignInScreen() {
       } else if (res.error) {
         setError(res.error);
         setGoogleBusy(false);
+      } else if (res.session?.user) {
+        const u = res.session.user;
+        const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
+        const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
+        app.signIn(u.email || '', name, 'google', u.id, avatar);
       }
       // If web OAuth redirect was triggered, browser leaves page
     } catch (err: any) {
@@ -168,6 +174,7 @@ export default function SignInScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: sky.sky[1] }}>
+      <StatusBar style="light" />
       <WeatherBackground sky={sky} dayProgress={0.5} reduceMotion={app.state.settings.reduceMotion} />
       <SafeAreaView style={{ flex: 1 }}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>

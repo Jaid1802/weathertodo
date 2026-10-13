@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Badge, Btn, Card, ConfirmDialog, IconBtn, Toggle, Touch, Txt } from '../components/ui';
 import { DateStrip, Field, OptionGrid, TimeStrip } from '../components/Pickers';
@@ -14,7 +15,7 @@ import { updateGoogleEvent } from '../lib/googleApi';
 
 export default function EventEditorScreen({ navigation, route }: any) {
   const app = useApp();
-  const { state, theme, weather } = app;
+  const { state, theme, weather, scheme } = app;
   const id: string | undefined = route?.params?.id;
   const preset = route?.params?.preset ?? {};
   const existing = id ? state.events.find((e) => e.id === id) : undefined;
@@ -144,6 +145,7 @@ export default function EventEditorScreen({ navigation, route }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
         <IconBtn icon="close" onPress={() => navigation.goBack()} label="Cancel" />
         <Txt v="headline" w="700" style={{ flex: 1 }}>{existing ? 'Edit event' : 'New event'}</Txt>

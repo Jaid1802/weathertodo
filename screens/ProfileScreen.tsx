@@ -9,6 +9,8 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Btn, Sheet, Touch } from '../components/ui';
 import { useApp } from '../lib/store';
@@ -26,6 +28,7 @@ export default function ProfileScreen({ navigation }: any) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(isGuest ? 'Guest' : (user?.name ?? ''));
   const [headline, setHeadline] = useState(user?.headline ?? 'Planning smarter every day');
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
 
   // Display values (Strictly enforce 'Guest' for guest login)
   const displayName = isGuest ? 'Guest' : (user?.name?.trim() || 'User');
@@ -75,8 +78,11 @@ export default function ProfileScreen({ navigation }: any) {
     },
   ];
 
+  const isFocused = useIsFocused();
+
   return (
     <View style={[styles.root, { backgroundColor: bg }]}>
+      {isFocused && <StatusBar style={isDark ? 'light' : 'dark'} />}
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
@@ -108,6 +114,26 @@ export default function ProfileScreen({ navigation }: any) {
             <Text numberOfLines={1} style={[styles.userDescription, { color: textMuted }]}>
               {displayHeadline}
             </Text>
+            {!isGuest && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                {app.syncStatus === 'syncing' ? (
+                  <>
+                    <Ionicons name="cloud-upload-outline" size={13} color="#3B82F6" />
+                    <Text style={{ fontSize: 11, color: '#3B82F6', marginLeft: 4, fontWeight: '500' }}>Syncing...</Text>
+                  </>
+                ) : app.syncStatus === 'error' ? (
+                  <Pressable onPress={() => app.syncWithCloud(true)} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Ionicons name="cloud-offline-outline" size={13} color="#F59E0B" />
+                    <Text style={{ fontSize: 11, color: '#F59E0B', marginLeft: 4, fontWeight: '500' }}>Offline (Tap to Retry)</Text>
+                  </Pressable>
+                ) : (
+                  <>
+                    <Ionicons name="cloud-done-outline" size={13} color="#10B981" />
+                    <Text style={{ fontSize: 11, color: '#10B981', marginLeft: 4, fontWeight: '500' }}>Cloud Synced</Text>
+                  </>
+                )}
+              </View>
+            )}
           </View>
 
           {/* Small Profile/User Icon on Right (touchable to edit profile) */}
@@ -168,7 +194,51 @@ export default function ProfileScreen({ navigation }: any) {
           <Ionicons name="log-out-outline" size={19} color="#EF4444" />
           <Text style={styles.signOutText}>Sign Out</Text>
         </Pressable>
+
+        {!isGuest && (
+          <Pressable
+            onPress={() => setDeleteConfirm(true)}
+            style={({ pressed }) => [
+              {
+                marginTop: 14,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingVertical: 10,
+                opacity: pressed ? 0.7 : 1,
+              },
+            ]}
+          >
+            <Ionicons name="trash-outline" size={15} color="#94A3B8" />
+            <Text style={{ fontSize: 13, color: '#94A3B8', marginLeft: 6, fontWeight: '500' }}>
+              Delete Account & Cloud Data
+            </Text>
+          </Pressable>
+        )}
       </ScrollView>
+
+      {/* Delete Account Confirmation Sheet */}
+      <Sheet visible={deleteConfirm} onClose={() => setDeleteConfirm(false)} title="Delete Account">
+        <Text style={{ fontSize: 14, color: textSecondary, marginBottom: 16, lineHeight: 20 }}>
+          This will permanently delete your account, synced tasks, calendar events, AI conversations, and cloud preferences from the database. This action cannot be undone.
+        </Text>
+        <Btn
+          title="Permanently Delete All Data"
+          kind="danger"
+          full
+          onPress={async () => {
+            setDeleteConfirm(false);
+            await app.deleteAccount();
+          }}
+        />
+        <View style={{ height: 10 }} />
+        <Btn
+          title="Cancel"
+          kind="ghost"
+          full
+          onPress={() => setDeleteConfirm(false)}
+        />
+      </Sheet>
 
       {/* Edit Profile Modal Sheet */}
       <Sheet visible={editing} onClose={() => setEditing(false)} title="Edit profile">

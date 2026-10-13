@@ -1,3 +1,6 @@
+import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 // Storage keys
 const ACCESS_TOKEN_KEY = '@weatherwhattodo/google_access_token';
 const REFRESH_TOKEN_KEY = '@weatherwhattodo/google_refresh_token';
@@ -49,28 +52,41 @@ export interface StoredTokens {
 let inMemoryAccessToken: string | null = null;
 let inMemoryExpiresAt: number = 0;
 let inMemoryRefreshToken: string | null = null;
+let inMemoryUser: GoogleUser | null = null;
 
-function getLocal(key: string): string | null {
-  if (typeof window === 'undefined') return null;
+async function getStored(key: string): Promise<string | null> {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
   try {
-    return localStorage.getItem(key);
+    return await AsyncStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function setLocal(key: string, value: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(key, value);
-  } catch {}
+function setStored(key: string, value: string): void {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(key, value);
+    } catch {}
+  } else {
+    AsyncStorage.setItem(key, value).catch(() => {});
+  }
 }
 
-function removeLocal(key: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.removeItem(key);
-  } catch {}
+function removeStored(key: string): void {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(key);
+    } catch {}
+  } else {
+    AsyncStorage.removeItem(key).catch(() => {});
+  }
 }
 
 /** Store tokens and user profile after successful code exchange */
@@ -85,24 +101,30 @@ export async function saveGoogleTokens(data: {
   inMemoryAccessToken = data.access_token;
   inMemoryExpiresAt = expiresAt;
 
-  setLocal(ACCESS_TOKEN_KEY, data.access_token);
-  setLocal(EXPIRES_AT_KEY, String(expiresAt));
+  setStored(ACCESS_TOKEN_KEY, data.access_token);
+  setStored(EXPIRES_AT_KEY, String(expiresAt));
 
   if (data.refresh_token) {
     inMemoryRefreshToken = data.refresh_token;
-    setLocal(REFRESH_TOKEN_KEY, data.refresh_token);
+    setStored(REFRESH_TOKEN_KEY, data.refresh_token);
   }
 
   if (data.user) {
-    setLocal(USER_INFO_KEY, JSON.stringify(data.user));
+    inMemoryUser = data.user;
+    setStored(USER_INFO_KEY, JSON.stringify(data.user));
   }
 }
 
 /** Get stored Google user profile */
 export async function getStoredGoogleUser(): Promise<GoogleUser | null> {
+  if (inMemoryUser) return inMemoryUser;
   try {
-    const raw = getLocal(USER_INFO_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const raw = await getStored(USER_INFO_KEY);
+    if (raw) {
+      inMemoryUser = JSON.parse(raw);
+      return inMemoryUser;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -111,9 +133,9 @@ export async function getStoredGoogleUser(): Promise<GoogleUser | null> {
 /** Check if user currently has stored tokens */
 export async function hasStoredGoogleAuth(): Promise<boolean> {
   if (inMemoryAccessToken && Date.now() < inMemoryExpiresAt) return true;
-  const refreshToken = getLocal(REFRESH_TOKEN_KEY);
+  const refreshToken = inMemoryRefreshToken || (await getStored(REFRESH_TOKEN_KEY));
   if (refreshToken) return true;
-  const token = getLocal(ACCESS_TOKEN_KEY);
+  const token = inMemoryAccessToken || (await getStored(ACCESS_TOKEN_KEY));
   return Boolean(token);
 }
 
@@ -155,7 +177,7 @@ export async function exchangeGoogleCode(
           res = fbRes;
           break;
         }
-      } catch {}
+      } catch { }
     }
   }
 
@@ -173,7 +195,7 @@ export async function exchangeGoogleCode(
  * Refreshes access token via backend proxy
  */
 export async function refreshGoogleAccessToken(): Promise<string | null> {
-  const refreshToken = inMemoryRefreshToken || getLocal(REFRESH_TOKEN_KEY);
+  const refreshToken = inMemoryRefreshToken || (await getStored(REFRESH_TOKEN_KEY));
   if (!refreshToken) {
     return null;
   }
@@ -200,7 +222,7 @@ export async function refreshGoogleAccessToken(): Promise<string | null> {
             res = fbRes;
             break;
           }
-        } catch {}
+        } catch { }
       }
     }
 
@@ -217,8 +239,8 @@ export async function refreshGoogleAccessToken(): Promise<string | null> {
       inMemoryAccessToken = data.access_token;
       inMemoryExpiresAt = expiresAt;
 
-      setLocal(ACCESS_TOKEN_KEY, data.access_token);
-      setLocal(EXPIRES_AT_KEY, String(expiresAt));
+      setStored(ACCESS_TOKEN_KEY, data.access_token);
+      setStored(EXPIRES_AT_KEY, String(expiresAt));
       return data.access_token;
     }
   } catch (err) {
@@ -238,8 +260,8 @@ export async function getValidAccessToken(): Promise<string | null> {
     return inMemoryAccessToken;
   }
 
-  const storedToken = getLocal(ACCESS_TOKEN_KEY);
-  const storedExpiresAt = Number(getLocal(EXPIRES_AT_KEY) || '0');
+  const storedToken = await getStored(ACCESS_TOKEN_KEY);
+  const storedExpiresAt = Number((await getStored(EXPIRES_AT_KEY)) || '0');
 
   if (storedToken && now < storedExpiresAt) {
     inMemoryAccessToken = storedToken;
@@ -257,19 +279,20 @@ export async function clearStoredGoogleTokens(): Promise<void> {
   inMemoryAccessToken = null;
   inMemoryExpiresAt = 0;
   inMemoryRefreshToken = null;
+  inMemoryUser = null;
 
-  removeLocal(ACCESS_TOKEN_KEY);
-  removeLocal(EXPIRES_AT_KEY);
-  removeLocal(USER_INFO_KEY);
-  removeLocal(REFRESH_TOKEN_KEY);
+  removeStored(ACCESS_TOKEN_KEY);
+  removeStored(EXPIRES_AT_KEY);
+  removeStored(USER_INFO_KEY);
+  removeStored(REFRESH_TOKEN_KEY);
 }
 
 /**
  * Disconnects Google account, revoking access token and clearing storage
  */
 export async function disconnectGoogleAccount(): Promise<void> {
-  const token = inMemoryAccessToken || getLocal(ACCESS_TOKEN_KEY);
-  const refreshToken = inMemoryRefreshToken || getLocal(REFRESH_TOKEN_KEY);
+  const token = inMemoryAccessToken || (await getStored(ACCESS_TOKEN_KEY));
+  const refreshToken = inMemoryRefreshToken || (await getStored(REFRESH_TOKEN_KEY));
   const tokenToRevoke = refreshToken || token;
 
   if (tokenToRevoke) {

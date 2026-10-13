@@ -1,11 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { Animated, Dimensions, ScrollView, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import WeatherBackground from '../components/WeatherBackground';
 import { Btn, GlassCard, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
 import { Space, getSky } from '../lib/theme';
+import { requestNotificationPermission } from '../lib/notifications';
 
 const PAGES = [
   {
@@ -42,12 +44,20 @@ export default function OnboardingScreen({ navigation }: any) {
   const sky = getSky(PAGES[page].sky);
   const reduce = app.state.settings.reduceMotion;
 
+  const handleFinishOnboarding = async () => {
+    try {
+      await requestNotificationPermission();
+    } catch {}
+    app.setOnboarded(true);
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: sky.sky[1] }}>
+      <StatusBar style="light" />
       <WeatherBackground sky={sky} dayProgress={0.4} reduceMotion={reduce} />
       <SafeAreaView style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: Space.lg, paddingTop: Space.xs }}>
-          <Touch onPress={() => app.setOnboarded(true)} scale={0.95}>
+          <Touch onPress={handleFinishOnboarding} scale={0.95}>
             <Txt v="sub" w="600" c={sky.onSkyMuted}>Skip</Txt>
           </Touch>
         </View>
@@ -94,7 +104,7 @@ export default function OnboardingScreen({ navigation }: any) {
             onTint={sky.onSky}
             icon={page === PAGES.length - 1 ? 'arrow-forward' : undefined}
             onPress={() => {
-              if (page === PAGES.length - 1) app.setOnboarded(true);
+              if (page === PAGES.length - 1) handleFinishOnboarding();
               else {
                 const next = page + 1;
                 setPage(next);

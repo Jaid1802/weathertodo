@@ -38,8 +38,24 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+# IDE
+.vscode/
+.idea/
+
+# Android / APK Builds
+*.apk
+*.aab
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+
+# Crash / Dump logs
+hs_err_pid*.log
+replay_pid*.log
+
 # generated native folders
 /ios
-/android
 .vercel
 .next/
+

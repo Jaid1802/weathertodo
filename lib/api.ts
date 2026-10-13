@@ -1,7 +1,8 @@
 // Backend API client for WeatherTodo
 
 // Default Render backend URL (can be customized via settings or env)
-export const DEFAULT_BACKEND_URL = 'https://weatherwhattodo-backend.onrender.com';
+export const DEFAULT_BACKEND_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL || 'https://weatherwhattodo-backend.onrender.com';
 
 export interface BackendHealth {
   status: string;

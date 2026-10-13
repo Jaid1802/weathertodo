@@ -1,6 +1,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Animated, FlatList, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Badge, Btn, Card, Chip, ConfirmDialog, EmptyState, IconBtn, Segmented, Sheet, Toggle, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
@@ -15,7 +17,7 @@ const KIND_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
 
 export default function CalendarScreen({ navigation }: any) {
   const app = useApp();
-  const { state, theme, weather } = app;
+  const { state, theme, weather, scheme } = app;
   const { width } = useWindowDimensions();
   const settings = state.settings;
   const [cursor, setCursor] = useState(startOfDay(new Date()));
@@ -88,9 +90,11 @@ export default function CalendarScreen({ navigation }: any) {
   }, [byDay]);
 
   const cell = (Math.min(width, 560) - Space.lg * 2 - 12) / 7;
+  const isFocused = useIsFocused();
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
+      {isFocused && <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />}
       {/* Header */}
       <View style={{ paddingHorizontal: Space.lg, paddingTop: Space.xs, paddingBottom: Space.sm, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
         <View style={{ flex: 1 }}>

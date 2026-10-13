@@ -10,7 +10,7 @@ function apiBaseUrl(): string {
   if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin;
   }
-  return '';
+  return process.env.EXPO_PUBLIC_BACKEND_URL || DEFAULT_BACKEND_URL;
 }
 
 export type SuggestionTone = 'positive' | 'caution' | 'critical' | 'info' | 'focus';

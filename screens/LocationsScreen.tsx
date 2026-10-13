@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Badge, Btn, Card, EmptyState, IconBtn, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
@@ -9,7 +10,7 @@ import { DEFAULT_PLACES, Place, condition, fmtTemp, reverseGeocode, searchPlaces
 
 export default function LocationsScreen({ navigation }: any) {
   const app = useApp();
-  const { state, theme, weatherByPlace, loadPlaceWeather } = app;
+  const { state, theme, weatherByPlace, loadPlaceWeather, scheme } = app;
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Place[]>([]);
   const [searching, setSearching] = useState(false);
@@ -144,6 +145,7 @@ export default function LocationsScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
         <IconBtn icon="chevron-back" onPress={() => navigation.goBack()} label="Back" />
         <View style={{ flex: 1 }}>

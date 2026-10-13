@@ -11,6 +11,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import WeatherIllustration from '../components/WeatherIllustration';
@@ -205,8 +207,11 @@ export default function HomeScreen({ navigation }: any) {
 
   const illustrationSize = isWide ? 120 : 105;
 
+  const isFocused = useIsFocused();
+
   return (
     <View style={styles.root}>
+      {isFocused && <StatusBar style="light" />}
       {/* Full-bleed dynamic weather atmosphere background with smooth crossfade */}
       <DynamicWeatherAtmosphere
         theme={weatherTheme}

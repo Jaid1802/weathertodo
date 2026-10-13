@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { FlatList, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Badge, Btn, Card, EmptyState, IconBtn, Segmented, Sheet, Toggle, Touch, Txt } from '../components/ui';
+import { Badge, Btn, Card, EmptyState, IconBtn, Sheet, Toggle, Touch, Txt } from '../components/ui';
 import { DateStrip, Field, OptionGrid, TimeStrip } from '../components/Pickers';
 import { useApp } from '../lib/store';
-import { Radius, Space } from '../lib/theme';
+import { Radius, Space, shadow } from '../lib/theme';
 import { Reminder, ReminderRepeat, ReminderTrigger } from '../lib/types';
 import { condition } from '../lib/weather';
 import { dateKey, minutesToLabel, relativeDay } from '../lib/utils';
@@ -24,9 +25,16 @@ const WEATHER_RULES = [
   { key: 'uv', label: 'When UV is high', icon: 'sunny' as const },
 ];
 
+const FILTER_ITEMS: { key: 'all' | ReminderTrigger; label: string; icon?: keyof typeof Ionicons.glyphMap }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'time', label: 'Time', icon: 'time-outline' },
+  { key: 'location', label: 'Place', icon: 'location-outline' },
+  { key: 'weather', label: 'Weather', icon: 'partly-sunny-outline' },
+];
+
 export default function RemindersScreen({ navigation }: any) {
   const app = useApp();
-  const { state, theme, weather } = app;
+  const { state, theme, weather, scheme } = app;
   const [filter, setFilter] = useState<'all' | ReminderTrigger>('all');
   const [composing, setComposing] = useState(false);
 
@@ -70,26 +78,62 @@ export default function RemindersScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+      {/* Header */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingTop: Space.xs, paddingBottom: Space.sm, gap: 12 }}>
         <IconBtn icon="chevron-back" onPress={() => navigation.goBack()} label="Back" />
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, justifyContent: 'center' }}>
           <Txt v="headline" w="700">Reminders</Txt>
           <Txt v="micro" c={theme.textTertiary}>{state.reminders.filter((r) => r.enabled).length} active</Txt>
         </View>
         <IconBtn icon="add" bg={theme.accent} color={theme.onAccent} onPress={() => { reset(); setComposing(true); }} label="New reminder" />
       </View>
 
-      <View style={{ paddingHorizontal: Space.lg, marginBottom: Space.sm }}>
-        <Segmented
-          options={[
-            { key: 'all', label: 'All' },
-            { key: 'time', label: 'Time', icon: 'time-outline' },
-            { key: 'location', label: 'Place', icon: 'location-outline' },
-            { key: 'weather', label: 'Weather', icon: 'partly-sunny-outline' },
-          ]}
-          value={filter}
-          onChange={setFilter as any}
-        />
+      {/* Filter Bar with horizontal scroll and centered items */}
+      <View style={{ marginBottom: Space.sm }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: Space.lg, gap: 8, flexDirection: 'row', alignItems: 'center' }}
+        >
+          {FILTER_ITEMS.map((item) => {
+            const active = filter === item.key;
+            return (
+              <Touch key={item.key} onPress={() => setFilter(item.key)} scale={0.96}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    paddingVertical: 8,
+                    paddingHorizontal: 16,
+                    borderRadius: Radius.pill,
+                    backgroundColor: active ? theme.bgElevated : theme.surfaceAlt,
+                    borderWidth: StyleSheet.hairlineWidth,
+                    borderColor: active ? theme.hairline : 'transparent',
+                    ...(active ? shadow(1, theme.shadow) : {}),
+                  }}
+                >
+                  {item.icon && (
+                    <Ionicons
+                      name={item.icon}
+                      size={15}
+                      color={active ? theme.text : theme.textTertiary}
+                    />
+                  )}
+                  <Txt
+                    v="sub"
+                    w={active ? '600' : '500'}
+                    c={active ? theme.text : theme.textTertiary}
+                  >
+                    {item.label}
+                  </Txt>
+                </View>
+              </Touch>
+            );
+          })}
+        </ScrollView>
       </View>
 
       <FlatList
@@ -99,27 +143,49 @@ export default function RemindersScreen({ navigation }: any) {
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
           activeWeatherRules.length ? (
-            <Card style={{ marginBottom: Space.md, backgroundColor: `${theme.warning}14`, borderColor: 'transparent' }}>
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <Ionicons name="notifications" size={17} color={theme.warning} />
-                <View style={{ flex: 1 }}>
-                  <Txt v="callout" w="700" c={theme.warning}>Conditions are triggering now</Txt>
-                  <Txt v="sub" c={theme.textSecondary} style={{ marginTop: 4, lineHeight: 19 }}>
-                    {state.reminders.filter((r) => r.trigger === 'weather' && r.enabled && r.weatherRule && activeWeatherRules.includes(r.weatherRule)).length
-                      ? state.reminders
-                          .filter((r) => r.trigger === 'weather' && r.enabled && r.weatherRule && activeWeatherRules.includes(r.weatherRule))
-                          .map((r) => `“${r.title}”`)
-                          .join(', ') + ' would fire based on the current forecast.'
-                      : `Current conditions match: ${activeWeatherRules.join(', ')}. Add a weather reminder to act on them.`}
-                  </Txt>
-                </View>
+            <View
+              style={{
+                marginBottom: Space.md,
+                borderRadius: Radius.lg,
+                padding: Space.md,
+                backgroundColor: scheme === 'dark' ? 'rgba(232, 137, 12, 0.14)' : 'rgba(232, 137, 12, 0.10)',
+                borderWidth: 1,
+                borderColor: scheme === 'dark' ? 'rgba(232, 137, 12, 0.35)' : 'rgba(232, 137, 12, 0.25)',
+                flexDirection: 'row',
+                alignItems: 'flex-start',
+                gap: 12,
+              }}
+            >
+              <View
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: scheme === 'dark' ? 'rgba(232, 137, 12, 0.25)' : 'rgba(232, 137, 12, 0.20)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginTop: 2,
+                }}
+              >
+                <Ionicons name="warning-outline" size={18} color={theme.warning} />
               </View>
-            </Card>
+              <View style={{ flex: 1 }}>
+                <Txt v="callout" w="700" c={theme.warning}>Conditions are triggering now</Txt>
+                <Txt v="sub" c={theme.textSecondary} style={{ marginTop: 4, lineHeight: 20 }}>
+                  {state.reminders.filter((r) => r.trigger === 'weather' && r.enabled && r.weatherRule && activeWeatherRules.includes(r.weatherRule)).length
+                    ? state.reminders
+                        .filter((r) => r.trigger === 'weather' && r.enabled && r.weatherRule && activeWeatherRules.includes(r.weatherRule))
+                        .map((r) => `“${r.title}”`)
+                        .join(', ') + ' would fire based on the current forecast.'
+                    : `Current conditions match: ${activeWeatherRules.join(', ')}. Add a weather reminder to act on them.`}
+                </Txt>
+              </View>
+            </View>
           ) : null
         }
         renderItem={({ item }) => <ReminderRow reminder={item} />}
         ListEmptyComponent={
-          <Card>
+          <Card style={{ marginVertical: Space.sm, alignItems: 'center' }}>
             <EmptyState
               icon="alarm-outline"
               title="No reminders here"

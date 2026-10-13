@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { AppState, Platform, useColorScheme } from 'react-native';
 import {
   CalEvent, CalendarInfo, ChatMessage, IntegrationState, Reminder, Settings, Task, TaskList, UserProfile,
 } from './types';
@@ -36,8 +37,52 @@ import {
   clearGoogleNotifications,
   syncAllNotifications,
 } from './notifications';
+import {
+  getUserStorageKey,
+  readLocalCache,
+  writeLocalCache,
+  removeLocalCache,
+  isValidUuid,
+  getDeletedTaskIds,
+  recordDeletedTaskId,
+  enqueuePendingSync,
+  flushPendingSyncQueue,
+  reconcileTasksWithCloud,
+  fetchRemoteUserData,
+  seedInitialUserDataIfEmpty,
+  saveProfileToCloud,
+  saveTaskToCloud,
+  deleteTaskFromCloud,
+  saveEventToCloud,
+  deleteEventFromCloud,
+  saveReminderToCloud,
+  deleteReminderFromCloud,
+  saveSettingsToCloud,
+  saveTaskListToCloud,
+  deleteTaskListFromCloud,
+  saveCalendarToCloud,
+  savePlaceToCloud,
+  deletePlaceFromCloud,
+  saveChatMessageToCloud,
+  clearChatInCloud,
+  saveUserStatsToCloud,
+  deleteAccountData,
+  subscribeToRealtimeChanges,
+  RemoteChange,
+  mapTaskRow,
+  mapEventRow,
+  mapReminderRow,
+  mapListRow,
+  mapCalendarRow,
+  mapPlaceRow,
+  mapChatRow,
+  mapSettingsRow,
+} from './syncService';
 
-const KEY = '@weatherwhattodo/v1';
+const LEGACY_KEY = '@weatherwhattodo/v1';
+const WEATHER_CACHE_KEY = '@weatherwhattodo/cached_weather';
+
+export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
 
 interface PersistShape {
   user: UserProfile | null;
@@ -106,7 +151,13 @@ type Action =
   | { type: 'hydrate'; payload: PersistShape }
   | { type: 'patch'; payload: Partial<PersistShape> }
   | { type: 'settings'; payload: Partial<Settings> }
-  | { type: 'notifications'; payload: Partial<Settings['notifications']> };
+  | { type: 'notifications'; payload: Partial<Settings['notifications']> }
+  | { type: 'realtimeTaskChange'; eventType: 'INSERT' | 'UPDATE' | 'DELETE'; newRecord?: any; oldRecord?: any }
+  | { type: 'realtimeEventChange'; eventType: 'INSERT' | 'UPDATE' | 'DELETE'; newRecord?: any; oldRecord?: any }
+  | { type: 'realtimeReminderChange'; eventType: 'INSERT' | 'UPDATE' | 'DELETE'; newRecord?: any; oldRecord?: any }
+  | { type: 'realtimeListChange'; eventType: 'INSERT' | 'UPDATE' | 'DELETE'; newRecord?: any; oldRecord?: any }
+  | { type: 'realtimeCalendarChange'; eventType: 'INSERT' | 'UPDATE' | 'DELETE'; newRecord?: any; oldRecord?: any }
+  | { type: 'realtimePlaceChange'; eventType: 'INSERT' | 'UPDATE' | 'DELETE'; newRecord?: any; oldRecord?: any };
 
 function reducer(state: PersistShape, action: Action): PersistShape {
   switch (action.type) {
@@ -118,6 +169,133 @@ function reducer(state: PersistShape, action: Action): PersistShape {
       return { ...state, settings: { ...state.settings, ...action.payload } };
     case 'notifications':
       return { ...state, settings: { ...state.settings, notifications: { ...state.settings.notifications, ...action.payload } } };
+    case 'realtimeTaskChange': {
+      const { eventType, newRecord, oldRecord } = action;
+      if (eventType === 'DELETE' && oldRecord?.id) {
+        return {
+          ...state,
+          tasks: state.tasks.filter((t) => t.id !== oldRecord.id),
+        };
+      }
+      if ((eventType === 'INSERT' || eventType === 'UPDATE') && newRecord?.id) {
+        const task = mapTaskRow(newRecord);
+        const exists = state.tasks.some((t) => t.id === task.id);
+        const nextTasks = exists
+          ? state.tasks.map((t) => (t.id === task.id ? task : t))
+          : [task, ...state.tasks];
+        return {
+          ...state,
+          tasks: nextTasks,
+        };
+      }
+      return state;
+    }
+    case 'realtimeEventChange': {
+      const { eventType, newRecord, oldRecord } = action;
+      if (eventType === 'DELETE' && oldRecord?.id) {
+        return {
+          ...state,
+          events: state.events.filter((e) => e.id !== oldRecord.id),
+        };
+      }
+      if ((eventType === 'INSERT' || eventType === 'UPDATE') && newRecord?.id) {
+        const ev = mapEventRow(newRecord);
+        const exists = state.events.some((e) => e.id === ev.id);
+        const nextEvents = exists
+          ? state.events.map((e) => (e.id === ev.id ? ev : e))
+          : [...state.events, ev];
+        return {
+          ...state,
+          events: nextEvents,
+        };
+      }
+      return state;
+    }
+    case 'realtimeReminderChange': {
+      const { eventType, newRecord, oldRecord } = action;
+      if (eventType === 'DELETE' && oldRecord?.id) {
+        return {
+          ...state,
+          reminders: state.reminders.filter((r) => r.id !== oldRecord.id),
+        };
+      }
+      if ((eventType === 'INSERT' || eventType === 'UPDATE') && newRecord?.id) {
+        const rem = mapReminderRow(newRecord);
+        const exists = state.reminders.some((r) => r.id === rem.id);
+        const nextReminders = exists
+          ? state.reminders.map((r) => (r.id === rem.id ? rem : r))
+          : [rem, ...state.reminders];
+        return {
+          ...state,
+          reminders: nextReminders,
+        };
+      }
+      return state;
+    }
+    case 'realtimeListChange': {
+      const { eventType, newRecord, oldRecord } = action;
+      if (eventType === 'DELETE' && oldRecord?.id) {
+        return {
+          ...state,
+          lists: state.lists.filter((l) => l.id !== oldRecord.id),
+          tasks: state.tasks.map((t) => (t.listId === oldRecord.id ? { ...t, listId: 'inbox' } : t)),
+        };
+      }
+      if ((eventType === 'INSERT' || eventType === 'UPDATE') && newRecord?.id) {
+        const list = mapListRow(newRecord);
+        const exists = state.lists.some((l) => l.id === list.id);
+        const nextLists = exists
+          ? state.lists.map((l) => (l.id === list.id ? list : l))
+          : [...state.lists, list];
+        return {
+          ...state,
+          lists: nextLists,
+        };
+      }
+      return state;
+    }
+    case 'realtimeCalendarChange': {
+      const { eventType, newRecord, oldRecord } = action;
+      if (eventType === 'DELETE' && oldRecord?.id) {
+        return {
+          ...state,
+          calendars: state.calendars.filter((c) => c.id !== oldRecord.id),
+        };
+      }
+      if ((eventType === 'INSERT' || eventType === 'UPDATE') && newRecord?.id) {
+        const cal = mapCalendarRow(newRecord);
+        const exists = state.calendars.some((c) => c.id === cal.id);
+        const nextCalendars = exists
+          ? state.calendars.map((c) => (c.id === cal.id ? cal : c))
+          : [...state.calendars, cal];
+        return {
+          ...state,
+          calendars: nextCalendars,
+        };
+      }
+      return state;
+    }
+    case 'realtimePlaceChange': {
+      const { eventType, newRecord, oldRecord } = action;
+      if (eventType === 'DELETE' && oldRecord?.id) {
+        return {
+          ...state,
+          places: state.places.filter((p) => p.id !== oldRecord.id),
+        };
+      }
+      if ((eventType === 'INSERT' || eventType === 'UPDATE') && newRecord?.id) {
+        const p = mapPlaceRow(newRecord);
+        const exists = state.places.some((x) => x.id === p.id);
+        const nextPlaces = exists
+          ? state.places.map((x) => (x.id === p.id ? p : x))
+          : [...state.places, p];
+        return {
+          ...state,
+          places: nextPlaces,
+        };
+      }
+      return state;
+    }
     default:
       return state;
   }
@@ -199,6 +377,11 @@ export interface Ctx {
   weatherByPlace: Record<string, WeatherBundle>;
   loadPlaceWeather: (p: Place) => Promise<void>;
   resetAll: () => void;
+  // cloud sync & multi-device
+  syncStatus: SyncStatus;
+  lastSyncedAt: number | null;
+  syncWithCloud: (force?: boolean, targetUserId?: string) => Promise<void>;
+  deleteAccount: () => Promise<void>;
 }
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -213,42 +396,172 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [weatherError, setWeatherError] = useState<string | null>(null);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const hydrated = useRef(false);
+  const isSyncingRef = useRef(false);
+
+  const nativeColorScheme = useColorScheme();
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
       const matcher = window.matchMedia('(prefers-color-scheme: dark)');
       setSystemDark(matcher.matches);
       const listener = (e: MediaQueryListEvent) => setSystemDark(e.matches);
       matcher.addEventListener('change', listener);
       return () => matcher.removeEventListener('change', listener);
+    } else if (nativeColorScheme) {
+      setSystemDark(nativeColorScheme === 'dark');
     }
-  }, []);
+  }, [nativeColorScheme]);
+
+  const syncWithCloud = useCallback(async (force = false, targetUserId?: string) => {
+    const userId = targetUserId || state.user?.id;
+    if (!userId || userId === 'guest_user' || !isValidUuid(userId) || !isSupabaseConfigured()) {
+      setSyncStatus('idle');
+      return;
+    }
+
+    if (isSyncingRef.current && !force) return;
+    isSyncingRef.current = true;
+    setSyncStatus('syncing');
+
+    try {
+      // 1. Flush durable pending mutations first (e.g. offline creations/edits/deletes)
+      await flushPendingSyncQueue(userId);
+
+      // 2. Fetch authoritative remote data
+      const remote = await fetchRemoteUserData(userId);
+      if (!remote) {
+        setSyncStatus('error');
+        return;
+      }
+
+      // 3. Reconcile local tasks with cloud tasks safely without data loss
+      const deletedIds = await getDeletedTaskIds(userId);
+      const { mergedTasks, tasksToUpload } = reconcileTasksWithCloud(
+        userId,
+        state.tasks,
+        remote.tasks,
+        deletedIds
+      );
+
+      // Upload legitimate local-only tasks to cloud idempotently
+      if (tasksToUpload.length > 0) {
+        for (const t of tasksToUpload) {
+          try {
+            await saveTaskToCloud(t, userId);
+          } catch (e) {
+            console.warn('[Sync] Failed to upload local task:', t.id, e);
+          }
+        }
+      }
+
+      // Reconcile task lists
+      const localLists = state.lists.filter((l) => l.source !== 'google');
+      const remoteListMap = new Map(remote.lists.map((l) => [l.id, l]));
+      const mergedLists = [...remote.lists];
+      for (const l of localLists) {
+        if (!remoteListMap.has(l.id)) {
+          await saveTaskListToCloud(l, userId).catch(() => {});
+          mergedLists.push(l);
+        }
+      }
+      const allLists = [
+        ...mergedLists,
+        ...state.lists.filter((l) => l.source === 'google'),
+      ];
+
+      // Reconcile events
+      const localEvents = state.events.filter((e) => e.source !== 'google');
+      const remoteEventMap = new Map(remote.events.map((e) => [e.id, e]));
+      const mergedEvents = [...remote.events];
+      for (const ev of localEvents) {
+        if (!remoteEventMap.has(ev.id)) {
+          await saveEventToCloud(ev, userId).catch(() => {});
+          mergedEvents.push(ev);
+        }
+      }
+      const allEvents = [
+        ...mergedEvents,
+        ...state.events.filter((e) => e.source === 'google'),
+      ];
+
+      // Reconcile calendars
+      const localCals = state.calendars.filter((c) => c.source !== 'google');
+      const remoteCalMap = new Map(remote.calendars.map((c) => [c.id, c]));
+      const mergedCals = [...remote.calendars];
+      for (const c of localCals) {
+        if (!remoteCalMap.has(c.id)) {
+          await saveCalendarToCloud(c, userId).catch(() => {});
+          mergedCals.push(c);
+        }
+      }
+      const allCals = [
+        ...mergedCals,
+        ...state.calendars.filter((c) => c.source === 'google'),
+      ];
+
+      // Merge remote authoritative records with local Google integration records
+      dispatch({
+        type: 'patch',
+        payload: {
+          user: remote.profile
+            ? {
+                id: userId,
+                name: remote.profile.name || state.user?.name || 'User',
+                email: remote.profile.email || state.user?.email || '',
+                avatarColor: remote.profile.avatarColor || state.user?.avatarColor || '#3B5BFF',
+                avatarUrl: remote.profile.avatarUrl || state.user?.avatarUrl,
+                createdAt: remote.profile.createdAt || state.user?.createdAt || Date.now(),
+                provider: state.user?.provider || (remote.profile.provider as any) || 'email',
+                headline: remote.profile.headline || state.user?.headline || 'Planning smarter every day',
+              }
+            : state.user,
+          settings: remote.settings
+            ? { ...state.settings, ...remote.settings }
+            : state.settings,
+          tasks: mergedTasks,
+          lists: allLists,
+          events: allEvents,
+          calendars: allCals,
+          reminders: remote.reminders.length > 0 ? remote.reminders : state.reminders,
+          places: remote.places.length > 0 ? remote.places : state.places,
+          chat: remote.chat.length > 0 ? remote.chat : state.chat,
+          stats: remote.stats ? remote.stats : state.stats,
+        },
+      });
+
+      setLastSyncedAt(Date.now());
+      setSyncStatus('synced');
+    } catch (err) {
+      console.error('[Sync] syncWithCloud failed:', err);
+      setSyncStatus('error');
+    } finally {
+      isSyncingRef.current = false;
+    }
+  }, [state.user?.id, state.tasks, state.lists, state.events, state.calendars, state.reminders, state.settings, state.places, state.chat, state.stats]);
 
   useEffect(() => {
     let mounted = true;
 
+    // Safety watchdog: ensure ready is set to true within 3.5s no matter what happens
+    const safetyTimer = setTimeout(() => {
+      if (mounted && !hydrated.current) {
+        console.warn('[Store] Hydration safety timer fired - forcing ready state');
+        hydrated.current = true;
+        setReady(true);
+      }
+    }, 3500);
+
     (async () => {
       let initialPersist: PersistShape = defaultState();
-      if (typeof window !== 'undefined') {
-        try {
-          const raw = localStorage.getItem(KEY);
-          if (raw) {
-            const parsed = JSON.parse(raw) as PersistShape;
-            initialPersist = {
-              ...defaultState(),
-              ...parsed,
-              settings: {
-                ...DEFAULT_SETTINGS,
-                ...(parsed.settings || {}),
-                notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.settings?.notifications || {}) },
-              },
-            };
-          }
-        } catch {}
+      let activeUserId: string | null = null;
+      let activeUserObj: UserProfile | null = null;
 
-        // 1. Check if returning from Supabase OAuth with an authorization code or error
-        if (typeof window !== 'undefined' && window.location) {
+      try {
+        // 1. Check if returning from Supabase OAuth with an authorization code or error (Web only)
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location) {
           try {
             const url = new URL(window.location.href);
             const code = url.searchParams.get('code');
@@ -276,19 +589,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                   window.sessionStorage.removeItem('@weatherwhattodo/auth_error');
                 }
                 const u = session.user;
+                activeUserId = u.id;
                 const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
                 const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
-                initialPersist.user = {
+                activeUserObj = {
                   id: u.id,
                   name,
                   email: u.email || '',
-                  avatarColor: initialPersist.user?.avatarColor || '#3B5BFF',
+                  avatarColor: '#3B5BFF',
                   avatarUrl: avatar,
                   createdAt: new Date(u.created_at).getTime() || Date.now(),
                   provider: 'google',
-                  headline: initialPersist.user?.headline || 'Planning smarter every day',
+                  headline: 'Planning smarter every day',
                 };
-                initialPersist.onboarded = true;
               }
             }
 
@@ -300,77 +613,158 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               url.pathname.includes('/auth/callback')
             ) {
               const cleanPath = url.pathname.replace(/\/auth\/callback\/?/, '/') || '/';
-              window.history.replaceState({}, document.title, cleanPath);
+              if (typeof document !== 'undefined') {
+                window.history.replaceState({}, document.title, cleanPath);
+              }
             }
           } catch (e) {
             console.warn('[Supabase] Auth callback error:', e);
           }
         }
 
-        // 2. Check active Supabase session if configured
-        if (isSupabaseConfigured()) {
+        // 2. Check active Supabase session if configured with strict 2.5s timeout
+        if (!activeUserId && isSupabaseConfigured()) {
           try {
-            const session = await getSupabaseSession();
+            const sessionPromise = getSupabaseSession();
+            const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500));
+            const session = await Promise.race([sessionPromise, timeoutPromise]);
             if (session?.user) {
               const u = session.user;
+              activeUserId = u.id;
               const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
               const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
-              initialPersist.user = {
+              activeUserObj = {
                 id: u.id,
                 name,
                 email: u.email || '',
-                avatarColor: initialPersist.user?.avatarColor || '#3B5BFF',
-                avatarUrl: avatar || initialPersist.user?.avatarUrl,
+                avatarColor: '#3B5BFF',
+                avatarUrl: avatar,
                 createdAt: new Date(u.created_at).getTime() || Date.now(),
                 provider: (u.app_metadata?.provider === 'google' ? 'google' : 'email'),
-                headline: initialPersist.user?.headline || 'Planning smarter every day',
+                headline: 'Planning smarter every day',
               };
-              initialPersist.onboarded = true;
             }
           } catch (e) {
             console.warn('[Supabase] Session check error:', e);
           }
         }
-      }
 
-      if (mounted) {
-        dispatch({ type: 'hydrate', payload: initialPersist });
-        hydrated.current = true;
-        setReady(true);
+        // 3. Load user-partitioned local cache with strict 2.5s timeout
+        const cacheKey = getUserStorageKey(activeUserId);
+        const cachePromise = readLocalCache(cacheKey);
+        const cacheTimeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500));
+        let parsed = await Promise.race([cachePromise, cacheTimeoutPromise]);
+
+        // Fallback migration: If partitioned cache doesn't exist yet, check legacy cache
+        if (!parsed && Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+          try {
+            const raw = window.localStorage.getItem(LEGACY_KEY);
+            if (raw) {
+              const legacy = JSON.parse(raw);
+              if (!activeUserId || legacy.user?.id === activeUserId) {
+                parsed = legacy;
+              }
+            }
+          } catch {}
+        }
+
+        if (parsed) {
+          initialPersist = {
+            ...defaultState(),
+            ...parsed,
+            settings: {
+              ...DEFAULT_SETTINGS,
+              ...(parsed.settings || {}),
+              notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.settings?.notifications || {}) },
+            },
+          };
+        }
+
+        if (activeUserObj) {
+          initialPersist.user = {
+            ...initialPersist.user,
+            ...activeUserObj,
+          };
+          initialPersist.onboarded = true;
+        }
+
+        if (mounted) {
+          dispatch({ type: 'hydrate', payload: initialPersist });
+          hydrated.current = true;
+          // Hydrate persistent cached weather
+          try {
+            const cachedWeather = await readLocalCache(WEATHER_CACHE_KEY);
+            if (cachedWeather && typeof cachedWeather === 'object') {
+              setWeatherByPlace(cachedWeather);
+              const activeId = initialPersist.activePlaceId;
+              const place = initialPersist.places.find((p) => p.id === activeId) ?? initialPersist.places[0] ?? DEFAULT_PLACES[0];
+              if (cachedWeather[place.id]) {
+                setWeather(cachedWeather[place.id]);
+                setWeatherLoading(false);
+              }
+            }
+          } catch {}
+          setReady(true);
+        }
+
+        // 4. Background cloud sync for authenticated users
+        if (activeUserId && activeUserId !== 'guest_user') {
+          syncWithCloud(false, activeUserId).catch((err) => {
+            console.warn('[Store] Background sync error:', err);
+          });
+        }
+      } catch (hydrationErr) {
+        console.error('[Store] Critical hydration error:', hydrationErr);
+        if (mounted) {
+          dispatch({ type: 'hydrate', payload: initialPersist });
+          hydrated.current = true;
+          setReady(true);
+        }
+      } finally {
+        clearTimeout(safetyTimer);
+        if (mounted && !hydrated.current) {
+          hydrated.current = true;
+          setReady(true);
+        }
       }
     })();
 
-    // 3. Listen to Supabase Auth State changes in realtime
+    // 5. Supabase Auth State changes listener
     let authSub: { unsubscribe: () => void } | null = null;
     if (isSupabaseConfigured()) {
       const client = getSupabaseClient();
       if (client) {
-        const { data } = client.auth.onAuthStateChange((event, session) => {
+        const { data } = client.auth.onAuthStateChange(async (event, session) => {
           if (!mounted) return;
           if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
             if (session?.user) {
               const u = session.user;
               const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
               const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
+              const usr: UserProfile = {
+                id: u.id,
+                name,
+                email: u.email || '',
+                avatarColor: '#3B5BFF',
+                avatarUrl: avatar,
+                createdAt: new Date(u.created_at).getTime() || Date.now(),
+                provider: (u.app_metadata?.provider === 'google' ? 'google' : 'email'),
+                headline: 'Planning smarter every day',
+              };
               dispatch({
                 type: 'patch',
                 payload: {
-                  user: {
-                    id: u.id,
-                    name,
-                    email: u.email || '',
-                    avatarColor: '#3B5BFF',
-                    avatarUrl: avatar,
-                    createdAt: new Date(u.created_at).getTime() || Date.now(),
-                    provider: (u.app_metadata?.provider === 'google' ? 'google' : 'email'),
-                    headline: 'Planning smarter every day',
-                  },
+                  user: usr,
                   onboarded: true,
                 },
               });
+              saveProfileToCloud(usr, u.id).catch(() => {});
+              syncWithCloud(false, u.id);
             }
           } else if (event === 'SIGNED_OUT') {
-            dispatch({ type: 'patch', payload: { user: null } });
+            clearUserNotifications(state.user?.id || 'guest_user');
+            dispatch({ type: 'hydrate', payload: defaultState() });
+            setSyncStatus('idle');
           }
         });
         authSub = data.subscription;
@@ -385,6 +779,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // Realtime subscription for cross-device synchronization
+  useEffect(() => {
+    const userId = state.user?.id;
+    if (!ready || !userId || userId === 'guest_user' || !isValidUuid(userId) || !isSupabaseConfigured()) {
+      return;
+    }
+
+    const unsubscribe = subscribeToRealtimeChanges(userId, (change: RemoteChange) => {
+      const { table, eventType, newRecord, oldRecord } = change;
+
+      if (table === 'tasks') {
+        dispatch({ type: 'realtimeTaskChange', eventType, newRecord, oldRecord });
+        if (eventType === 'DELETE' && oldRecord?.id) {
+          cancelTaskNotification(oldRecord.id, userId);
+        } else if ((eventType === 'INSERT' || eventType === 'UPDATE') && newRecord) {
+          const task = mapTaskRow(newRecord);
+          rescheduleTaskNotification(task, userId, state.settings);
+        }
+      } else if (table === 'events') {
+        dispatch({ type: 'realtimeEventChange', eventType, newRecord, oldRecord });
+        if (eventType === 'DELETE' && oldRecord?.id) {
+          cancelEventNotification(oldRecord.id, userId);
+        } else if ((eventType === 'INSERT' || eventType === 'UPDATE') && newRecord) {
+          const ev = mapEventRow(newRecord);
+          rescheduleEventNotification(ev, userId, state.settings);
+        }
+      } else if (table === 'reminders') {
+        dispatch({ type: 'realtimeReminderChange', eventType, newRecord, oldRecord });
+      } else if (table === 'user_settings' && newRecord) {
+        const remoteSettings = mapSettingsRow(newRecord);
+        dispatch({ type: 'settings', payload: remoteSettings });
+      } else if (table === 'task_lists') {
+        dispatch({ type: 'realtimeListChange', eventType, newRecord, oldRecord });
+      } else if (table === 'calendars') {
+        dispatch({ type: 'realtimeCalendarChange', eventType, newRecord, oldRecord });
+      } else if (table === 'places') {
+        dispatch({ type: 'realtimePlaceChange', eventType, newRecord, oldRecord });
+      } else if (table === 'ask_clever_messages' && newRecord) {
+        const msg = mapChatRow(newRecord);
+        dispatch({ type: 'patch', payload: { chat: [...state.chat.filter((m) => m.id !== msg.id), msg] } });
+      }
+    });
+
+    return unsubscribe;
+  }, [ready, state.user?.id]);
+
   // Initialize notification background engine
   useEffect(() => {
     const cleanup = initNotificationEngine();
@@ -398,13 +838,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     syncAllNotifications(state.tasks, state.events, userId, state.settings);
   }, [ready, state.user?.id, state.tasks, state.events, state.settings.notifications]);
 
+  // Persist state to partitioned local storage
   useEffect(() => {
-    if (!hydrated.current || typeof window === 'undefined') return;
+    if (!hydrated.current) return;
+    const userId = state.user?.id || 'guest_user';
+    const storageKey = getUserStorageKey(userId);
     const id = setTimeout(() => {
-      try {
-        localStorage.setItem(KEY, JSON.stringify(state));
-      } catch {}
-    }, 200);
+      writeLocalCache(storageKey, state).catch(() => {});
+    }, 250);
     return () => clearTimeout(id);
   }, [state]);
 
@@ -426,12 +867,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const b = await fetchWeather(place);
       setWeather(b);
-      setWeatherByPlace((m) => ({ ...m, [place.id]: b }));
+      setWeatherByPlace((m) => {
+        const next = { ...m, [place.id]: b };
+        writeLocalCache(WEATHER_CACHE_KEY, next).catch(() => {});
+        return next;
+      });
       if (b.source === 'offline') setWeatherError('Showing modelled forecast — live data unavailable');
     } catch {
-      const b = synthesize(place);
-      setWeather(b);
-      setWeatherError('Offline mode');
+      if (cached) {
+        setWeather(cached);
+        setWeatherError('Offline mode — displaying cached forecast');
+      } else {
+        const b = synthesize(place);
+        setWeather(b);
+        setWeatherError('Offline mode');
+      }
     } finally {
       setWeatherLoading(false);
     }
@@ -440,41 +890,112 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const loadPlaceWeather = useCallback(async (p: Place) => {
     const cached = weatherByPlace[p.id];
     if (cached && Date.now() - cached.fetchedAt < 1000 * 60 * 15) return;
-    const b = await fetchWeather(p);
-    setWeatherByPlace((m) => ({ ...m, [p.id]: b }));
+    try {
+      const b = await fetchWeather(p);
+      setWeatherByPlace((m) => {
+        const next = { ...m, [p.id]: b };
+        writeLocalCache(WEATHER_CACHE_KEY, next).catch(() => {});
+        return next;
+      });
+    } catch {}
   }, [weatherByPlace]);
 
-  // Auto-detect real device/browser location on startup
+  // Persistent location handling on startup:
+  // If user already has a saved place, use it without re-prompting for GPS or resolving coordinates unnecessarily.
+  // Only on first launch (no saved places): determine initial location once.
   useEffect(() => {
-    if (!ready || typeof window === 'undefined') return;
-    const hasCurrent = state.places.some((p) => p.id === 'current');
-    if (navigator?.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          try {
+    if (!ready) return;
+    if (state.places.length > 0) return;
+
+    if (Platform.OS === 'web') {
+      if (typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            try {
+              const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+              const currentPlace: Place = { ...place, id: 'current' };
+              dispatch({
+                type: 'patch',
+                payload: {
+                  places: [currentPlace],
+                  activePlaceId: 'current',
+                },
+              });
+            } catch {
+              dispatch({
+                type: 'patch',
+                payload: {
+                  places: [DEFAULT_PLACES[0]],
+                  activePlaceId: DEFAULT_PLACES[0].id,
+                },
+              });
+            }
+          },
+          () => {
+            // Permission denied: retain default place without crashing
+            dispatch({
+              type: 'patch',
+              payload: {
+                places: [DEFAULT_PLACES[0]],
+                activePlaceId: DEFAULT_PLACES[0].id,
+              },
+            });
+          },
+          { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
+        );
+      } else {
+        dispatch({
+          type: 'patch',
+          payload: {
+            places: [DEFAULT_PLACES[0]],
+            activePlaceId: DEFAULT_PLACES[0].id,
+          },
+        });
+      }
+    } else {
+      // Native Android / iOS
+      (async () => {
+        try {
+          const Location = await import('expo-location');
+          const perm = await Location.getForegroundPermissionsAsync();
+          let granted = perm.status === 'granted';
+          if (perm.status === 'undetermined') {
+            const req = await Location.requestForegroundPermissionsAsync();
+            granted = req.status === 'granted';
+          }
+          if (granted) {
+            const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
             const place = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
             const currentPlace: Place = { ...place, id: 'current' };
             dispatch({
               type: 'patch',
               payload: {
-                places: [
-                  currentPlace,
-                  ...state.places.filter((p) => p.id !== 'current' && p.id !== 'sf' && p.name !== currentPlace.name),
-                ],
-                activePlaceId: (!state.activePlaceId || state.activePlaceId === 'current' || state.activePlaceId === 'sf' || !hasCurrent)
-                  ? 'current'
-                  : state.activePlaceId,
+                places: [currentPlace],
+                activePlaceId: 'current',
               },
             });
-          } catch {}
-        },
-        () => {
-          // Permission denied or unavailable — keep existing state without forcing SF
-        },
-        { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
-      );
+          } else {
+            // Permission denied: retain default place
+            dispatch({
+              type: 'patch',
+              payload: {
+                places: [DEFAULT_PLACES[0]],
+                activePlaceId: DEFAULT_PLACES[0].id,
+              },
+            });
+          }
+        } catch {
+          dispatch({
+            type: 'patch',
+            payload: {
+              places: [DEFAULT_PLACES[0]],
+              activePlaceId: DEFAULT_PLACES[0].id,
+            },
+          });
+        }
+      })();
     }
-  }, [ready]);
+  }, [ready, state.places.length]);
 
   useEffect(() => {
     if (!ready) return;
@@ -506,7 +1027,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 ...data.calendars,
               ],
               events: [
-                ...state.events.filter((e) => e.source !== 'google' && !e.id.startsWith('e_')),
+                ...state.events.filter((e) => e.source !== 'google'),
                 ...data.events,
               ],
               lists: [
@@ -514,7 +1035,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 ...data.lists,
               ],
               tasks: [
-                ...state.tasks.filter((t) => t.source !== 'google' && !t.id.startsWith('t_')),
+                ...state.tasks.filter((t) => t.source !== 'google'),
                 ...data.tasks,
               ],
               integrations: {
@@ -533,14 +1054,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     checkAndSync();
 
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        checkAndSync();
+    if (Platform.OS === 'web') {
+      const onVisibilityChange = () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+          checkAndSync();
+          if (state.user?.id && state.user.id !== 'guest_user') {
+            syncWithCloud(true);
+          }
+        }
+      };
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', onVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', onVisibilityChange);
       }
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [ready, state.integrations.googleCalendar, state.integrations.googleTasks]);
+    } else {
+      const sub = AppState.addEventListener('change', (nextAppState) => {
+        if (nextAppState === 'active') {
+          checkAndSync();
+          if (state.user?.id && state.user.id !== 'guest_user') {
+            syncWithCloud(true);
+          }
+        }
+      });
+      return () => sub.remove();
+    }
+  }, [ready, state.integrations.googleCalendar, state.integrations.googleTasks, state.user?.id, syncWithCloud]);
 
   const scheme: ColorScheme = state.settings.themeMode === 'system'
     ? (systemDark ? 'dark' : 'light')
@@ -555,6 +1093,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     theme,
     scheme,
     fontScale,
+    syncStatus,
+    lastSyncedAt,
+    syncWithCloud,
     signIn: (email, name, provider = 'email', customId?: string, avatarUrl?: string) => {
       // 1. Explicit handling for Guest session
       if (provider === 'guest') {
@@ -581,6 +1122,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             onboarded: true,
           },
         });
+        setSyncStatus('idle');
         return;
       }
 
@@ -588,27 +1130,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const colors = ['#3B5BFF', '#7B5BFF', '#0FA968', '#E8890C', '#E5484D', '#0C8CE9'];
       const rawName = name || email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
       const nm = (rawName.trim() === 'Guest' || rawName.trim() === 'Guest User') ? (email.split('@')[0] || 'User') : rawName;
-      const existingId = (state.user && state.user.provider !== 'guest' && state.user.email === email)
+      const existingId = (state.user && state.user.provider !== 'guest' && state.user.email === email && isValidUuid(state.user.id))
         ? state.user.id
         : undefined;
-      const userId = customId || existingId || uid('u');
+      const userId = (customId && isValidUuid(customId))
+        ? customId
+        : (existingId || customId || uid('u'));
+
+      const userProfile: UserProfile = {
+        id: userId,
+        name: nm,
+        email,
+        avatarColor: colors[Math.floor(Math.random() * colors.length)],
+        avatarUrl: avatarUrl || (state.user?.provider !== 'guest' ? state.user?.avatarUrl : undefined),
+        createdAt: (state.user && state.user.provider !== 'guest') ? state.user.createdAt : Date.now(),
+        provider,
+        headline: (state.user && state.user.provider !== 'guest' ? state.user.headline : 'Planning smarter every day'),
+      };
 
       dispatch({
         type: 'patch',
         payload: {
-          user: {
-            id: userId,
-            name: nm,
-            email,
-            avatarColor: colors[Math.floor(Math.random() * colors.length)],
-            avatarUrl: avatarUrl || (state.user?.provider !== 'guest' ? state.user?.avatarUrl : undefined),
-            createdAt: (state.user && state.user.provider !== 'guest') ? state.user.createdAt : Date.now(),
-            provider,
-            headline: (state.user && state.user.provider !== 'guest' ? state.user.headline : 'Planning smarter every day'),
-          },
+          user: userProfile,
           onboarded: true,
         },
       });
+
+      if (isValidUuid(userId)) {
+        saveProfileToCloud(userProfile, userId).catch(() => {});
+        syncWithCloud(true, userId);
+      } else if (isSupabaseConfigured()) {
+        getSupabaseSession().then((session) => {
+          if (session?.user?.id && isValidUuid(session.user.id)) {
+            const canonicalId = session.user.id;
+            const updatedProfile = { ...userProfile, id: canonicalId };
+            dispatch({ type: 'patch', payload: { user: updatedProfile } });
+            saveProfileToCloud(updatedProfile, canonicalId).catch(() => {});
+            syncWithCloud(true, canonicalId);
+          }
+        }).catch(() => {});
+      }
     },
     signOut: async () => {
       const currentUserId = state.user?.id || 'guest_user';
@@ -621,29 +1182,93 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         await clearStoredGoogleTokens();
       } catch {}
-      dispatch({
-        type: 'patch',
-        payload: {
-          user: null,
-          integrations: {
-            googleCalendar: false,
-            googleTasks: false,
-            account: undefined,
-            lastSyncCalendar: undefined,
-            lastSyncTasks: undefined,
-          },
-        },
-      });
+      dispatch({ type: 'hydrate', payload: defaultState() });
+      setSyncStatus('idle');
+      setLastSyncedAt(null);
     },
-    updateProfile: (p) => dispatch({ type: 'patch', payload: { user: state.user ? { ...state.user, ...p } : null } }),
+    deleteAccount: async () => {
+      const currentUserId = state.user?.id;
+      if (!currentUserId || currentUserId === 'guest_user') {
+        clearUserNotifications('guest_user');
+        dispatch({ type: 'hydrate', payload: defaultState() });
+        setSyncStatus('idle');
+        return;
+      }
+
+      clearUserNotifications(currentUserId);
+      try {
+        await deleteAccountData(currentUserId);
+      } catch (err) {
+        console.error('deleteAccountData error:', err);
+      }
+      try {
+        await signOutSupabase();
+      } catch {}
+      try {
+        await clearStoredGoogleTokens();
+      } catch {}
+      await removeLocalCache(getUserStorageKey(currentUserId));
+      dispatch({ type: 'hydrate', payload: defaultState() });
+      setSyncStatus('idle');
+      setLastSyncedAt(null);
+    },
+    updateProfile: (p) => {
+      if (!state.user) return;
+      const updatedUser = { ...state.user, ...p };
+      dispatch({ type: 'patch', payload: { user: updatedUser } });
+      if (updatedUser.id && updatedUser.id !== 'guest_user') {
+        saveProfileToCloud(updatedUser, updatedUser.id).catch(() => {});
+      }
+    },
     setOnboarded: (v) => dispatch({ type: 'patch', payload: { onboarded: v } }),
-    setSettings: (p) => dispatch({ type: 'settings', payload: p }),
-    setNotifications: (p) => dispatch({ type: 'notifications', payload: p }),
+    setSettings: (p) => {
+      const nextSettings = { ...state.settings, ...p };
+      dispatch({ type: 'settings', payload: p });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveSettingsToCloud(nextSettings, state.user.id).catch(() => {});
+      }
+    },
+    updateSettings: (p) => {
+      const nextSettings = { ...state.settings, ...p };
+      dispatch({ type: 'settings', payload: p });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveSettingsToCloud(nextSettings, state.user.id).catch(() => {});
+      }
+    },
+    setNotifications: (p) => {
+      const nextSettings = {
+        ...state.settings,
+        notifications: { ...state.settings.notifications, ...p },
+      };
+      dispatch({ type: 'notifications', payload: p });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveSettingsToCloud(nextSettings, state.user.id).catch(() => {});
+      }
+    },
     addTask: (t) => {
       const task: Task = { id: t.id ?? uid('t'), createdAt: t.createdAt ?? Date.now(), ...t } as Task;
       dispatch({ type: 'patch', payload: { tasks: [task, ...state.tasks] } });
       const userId = state.user?.id || 'guest_user';
       scheduleTaskNotification(task, userId, state.settings);
+      if (isValidUuid(state.user?.id)) {
+        setSyncStatus('syncing');
+        saveTaskToCloud(task, state.user!.id)
+          .then(() => {
+            setSyncStatus('synced');
+            setLastSyncedAt(Date.now());
+          })
+          .catch((err) => {
+            console.warn('[Sync] Failed to save task immediately, enqueuing for background sync:', err);
+            setSyncStatus('error');
+            enqueuePendingSync(state.user!.id, {
+              id: task.id,
+              table: 'tasks',
+              action: 'upsert',
+              record: task,
+              timestamp: Date.now(),
+            }).catch(() => {});
+          });
+      }
       return task;
     },
     updateTask: (id, p) => {
@@ -653,12 +1278,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const userId = state.user?.id || 'guest_user';
       if (updated) {
         rescheduleTaskNotification(updated, userId, state.settings);
+        if (isValidUuid(state.user?.id)) {
+          setSyncStatus('syncing');
+          saveTaskToCloud(updated, state.user!.id)
+            .then(() => {
+              setSyncStatus('synced');
+              setLastSyncedAt(Date.now());
+            })
+            .catch((err) => {
+              console.warn('[Sync] Failed to update task in cloud, enqueuing:', err);
+              setSyncStatus('error');
+              enqueuePendingSync(state.user!.id, {
+                id: updated.id,
+                table: 'tasks',
+                action: 'upsert',
+                record: updated,
+                timestamp: Date.now(),
+              }).catch(() => {});
+            });
+        }
       }
     },
     toggleTask: (id) => {
       const t = state.tasks.find((x) => x.id === id);
       const nowDone = t ? !t.done : true;
       const userId = state.user?.id || 'guest_user';
+      const updatedTask = t ? { ...t, done: nowDone, completedAt: nowDone ? Date.now() : undefined } : null;
+
       dispatch({
         type: 'patch',
         payload: {
@@ -670,6 +1316,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         cancelTaskNotification(id, userId);
       } else if (t) {
         scheduleTaskNotification({ ...t, done: false }, userId, state.settings);
+      }
+      if (updatedTask && isValidUuid(state.user?.id)) {
+        setSyncStatus('syncing');
+        saveTaskToCloud(updatedTask, state.user!.id)
+          .then(() => {
+            setSyncStatus('synced');
+            setLastSyncedAt(Date.now());
+          })
+          .catch((err) => {
+            console.warn('[Sync] Failed to save toggled task in cloud, enqueuing:', err);
+            setSyncStatus('error');
+            enqueuePendingSync(state.user!.id, {
+              id: updatedTask.id,
+              table: 'tasks',
+              action: 'upsert',
+              record: updatedTask,
+              timestamp: Date.now(),
+            }).catch(() => {});
+          });
       }
       // Synchronize completion status with Google Tasks API if it is a Google task
       if (t && t.source === 'google' && t.listId) {
@@ -683,25 +1348,58 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const userId = state.user?.id || 'guest_user';
       cancelTaskNotification(id, userId);
       dispatch({ type: 'patch', payload: { tasks: state.tasks.filter((t) => t.id !== id) } });
+      if (isValidUuid(state.user?.id)) {
+        recordDeletedTaskId(state.user!.id, id).catch(() => {});
+        setSyncStatus('syncing');
+        deleteTaskFromCloud(id, state.user!.id)
+          .then(() => {
+            setSyncStatus('synced');
+            setLastSyncedAt(Date.now());
+          })
+          .catch((err) => {
+            console.warn('[Sync] Failed to delete task in cloud, enqueuing:', err);
+            setSyncStatus('error');
+            enqueuePendingSync(state.user!.id, {
+              id,
+              table: 'tasks',
+              action: 'delete',
+              timestamp: Date.now(),
+            }).catch(() => {});
+          });
+      }
       if (task && task.source === 'google' && task.listId) {
         deleteGoogleTask(task.listId, task.id).catch((err) => {
           console.warn('Failed to sync task deletion to Google Tasks:', err);
         });
       }
     },
-    addList: (name, color, icon) => dispatch({ type: 'patch', payload: { lists: [...state.lists, { id: uid('l'), name, color, icon, source: 'local' }] } }),
-    deleteList: (id) => dispatch({
-      type: 'patch',
-      payload: {
-        lists: state.lists.filter((l) => l.id !== id),
-        tasks: state.tasks.map((t) => (t.listId === id ? { ...t, listId: 'inbox' } : t)),
-      },
-    }),
+    addList: (name, color, icon) => {
+      const newList: TaskList = { id: uid('l'), name, color, icon, source: 'local' };
+      dispatch({ type: 'patch', payload: { lists: [...state.lists, newList] } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveTaskListToCloud(newList, state.user.id).catch(() => {});
+      }
+    },
+    deleteList: (id) => {
+      dispatch({
+        type: 'patch',
+        payload: {
+          lists: state.lists.filter((l) => l.id !== id),
+          tasks: state.tasks.map((t) => (t.listId === id ? { ...t, listId: 'inbox' } : t)),
+        },
+      });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        deleteTaskListFromCloud(id, state.user.id).catch(() => {});
+      }
+    },
     addEvent: (e) => {
       const ev: CalEvent = { id: e.id ?? uid('e'), ...e } as CalEvent;
       dispatch({ type: 'patch', payload: { events: [...state.events, ev] } });
       const userId = state.user?.id || 'guest_user';
       scheduleEventNotification(ev, userId, state.settings);
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveEventToCloud(ev, state.user.id).catch(() => {});
+      }
       return ev;
     },
     updateEvent: (id, p) => {
@@ -711,6 +1409,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const userId = state.user?.id || 'guest_user';
       if (updated) {
         rescheduleEventNotification(updated, userId, state.settings);
+        if (state.user?.id && state.user.id !== 'guest_user') {
+          saveEventToCloud(updated, state.user.id).catch(() => {});
+        }
       }
     },
     deleteEvent: (id) => {
@@ -718,16 +1419,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const userId = state.user?.id || 'guest_user';
       cancelEventNotification(id, userId);
       dispatch({ type: 'patch', payload: { events: state.events.filter((e) => e.id !== id) } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        deleteEventFromCloud(id, state.user.id).catch(() => {});
+      }
       if (event && event.source === 'google' && event.calendarId) {
         deleteGoogleEvent(event.calendarId, event.id).catch((err) => {
           console.warn('Failed to sync event deletion to Google Calendar:', err);
         });
       }
     },
-    toggleCalendar: (id) => dispatch({ type: 'patch', payload: { calendars: state.calendars.map((c) => (c.id === id ? { ...c, visible: !c.visible } : c)) } }),
-    addReminder: (r) => dispatch({ type: 'patch', payload: { reminders: [{ id: uid('r'), createdAt: Date.now(), enabled: true, trigger: 'time' as const, repeat: 'none' as const, ...r }, ...state.reminders] } }),
-    updateReminder: (id, p) => dispatch({ type: 'patch', payload: { reminders: state.reminders.map((r) => (r.id === id ? { ...r, ...p } : r)) } }),
-    deleteReminder: (id) => dispatch({ type: 'patch', payload: { reminders: state.reminders.filter((r) => r.id !== id) } }),
+    toggleCalendar: (id) => {
+      const nextCalendars = state.calendars.map((c) => (c.id === id ? { ...c, visible: !c.visible } : c));
+      dispatch({ type: 'patch', payload: { calendars: nextCalendars } });
+      const updated = nextCalendars.find((c) => c.id === id);
+      if (updated && state.user?.id && state.user.id !== 'guest_user') {
+        saveCalendarToCloud(updated, state.user.id).catch(() => {});
+      }
+    },
+    addReminder: (r) => {
+      const newRem: Reminder = { id: uid('r'), createdAt: Date.now(), enabled: true, trigger: 'time' as const, repeat: 'none' as const, ...r };
+      dispatch({ type: 'patch', payload: { reminders: [newRem, ...state.reminders] } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveReminderToCloud(newRem, state.user.id).catch(() => {});
+      }
+    },
+    updateReminder: (id, p) => {
+      const nextReminders = state.reminders.map((r) => (r.id === id ? { ...r, ...p } : r));
+      dispatch({ type: 'patch', payload: { reminders: nextReminders } });
+      const updated = nextReminders.find((r) => r.id === id);
+      if (updated && state.user?.id && state.user.id !== 'guest_user') {
+        saveReminderToCloud(updated, state.user.id).catch(() => {});
+      }
+    },
+    deleteReminder: (id) => {
+      dispatch({ type: 'patch', payload: { reminders: state.reminders.filter((r) => r.id !== id) } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        deleteReminderFromCloud(id, state.user.id).catch(() => {});
+      }
+    },
     events: state.events,
     tasks: state.tasks,
     reminders: state.reminders,
@@ -739,8 +1468,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     loadingWeather: weatherLoading,
     calendarLoading,
     tasksLoading,
-    updateSettings: (p) => dispatch({ type: 'settings', payload: p }),
-    addChatMessage: (m) => dispatch({ type: 'patch', payload: { chat: [...state.chat, m] } }),
+    addChatMessage: (m) => {
+      dispatch({ type: 'patch', payload: { chat: [...state.chat, m] } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveChatMessageToCloud(m, state.user.id).catch(() => {});
+      }
+    },
     addPlace: (p) => {
       if (p.id === 'current') {
         const others = state.places.filter((x) => x.id !== 'current');
@@ -752,6 +1485,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       dispatch({ type: 'patch', payload: { places: [...state.places, p], activePlaceId: p.id } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        savePlaceToCloud(p, state.user.id, state.places.length).catch(() => {});
+      }
     },
     removePlace: (id) => {
       const next = state.places.filter((p) => p.id !== id);
@@ -759,6 +1495,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         type: 'patch',
         payload: { places: next, activePlaceId: state.activePlaceId === id ? next[0]?.id ?? DEFAULT_PLACES[0].id : state.activePlaceId },
       });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        deletePlaceFromCloud(id, state.user.id).catch(() => {});
+      }
     },
     setActivePlace: (idOrPlace) => {
       const id = typeof idOrPlace === 'string' ? idOrPlace : idOrPlace.id;
@@ -793,7 +1532,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               ...calendars,
             ],
             events: [
-              ...state.events.filter((e) => e.source !== 'google' && !e.id.startsWith('e_')),
+              ...state.events.filter((e) => e.source !== 'google'),
               ...events,
             ],
             integrations: {
@@ -829,7 +1568,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               ...lists,
             ],
             tasks: [
-              ...state.tasks.filter((t) => t.source !== 'google' && !t.id.startsWith('t_')),
+              ...state.tasks.filter((t) => t.source !== 'google'),
               ...tasks,
             ],
             integrations: {
@@ -868,13 +1607,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               ? { calendars: [...state.calendars.filter((c) => c.source !== 'google' && c.id !== 'cal_primary'), ...data.calendars] }
               : {}),
             ...(payload?.events !== undefined || !payload
-              ? { events: [...state.events.filter((e) => e.source !== 'google' && !e.id.startsWith('e_')), ...data.events] }
+              ? { events: [...state.events.filter((e) => e.source !== 'google'), ...data.events] }
               : {}),
             ...(payload?.lists !== undefined || !payload
               ? { lists: [...state.lists.filter((l) => l.source !== 'google' && l.id !== 'inbox'), ...data.lists] }
               : {}),
             ...(payload?.tasks !== undefined || !payload
-              ? { tasks: [...state.tasks.filter((t) => t.source !== 'google' && !t.id.startsWith('t_')), ...data.tasks] }
+              ? { tasks: [...state.tasks.filter((t) => t.source !== 'google'), ...data.tasks] }
               : {}),
             integrations: {
               ...state.integrations,
@@ -934,10 +1673,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         },
       });
     },
-    pushChat: (m) => dispatch({ type: 'patch', payload: { chat: [...state.chat, m] } }),
-    updateChat: (id, p) => dispatch({ type: 'patch', payload: { chat: state.chat.map((c) => (c.id === id ? { ...c, ...p } : c)) } }),
-    clearChat: () => dispatch({ type: 'patch', payload: { chat: [] } }),
-    bumpStat: (k, by = 1) => dispatch({ type: 'patch', payload: { stats: { ...state.stats, [k]: state.stats[k] + by } } }),
+    pushChat: (m) => {
+      dispatch({ type: 'patch', payload: { chat: [...state.chat, m] } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveChatMessageToCloud(m, state.user.id).catch(() => {});
+      }
+    },
+    updateChat: (id, p) => {
+      const nextChat = state.chat.map((c) => (c.id === id ? { ...c, ...p } : c));
+      dispatch({ type: 'patch', payload: { chat: nextChat } });
+      const updated = nextChat.find((c) => c.id === id);
+      if (updated && state.user?.id && state.user.id !== 'guest_user') {
+        saveChatMessageToCloud(updated, state.user.id).catch(() => {});
+      }
+    },
+    clearChat: () => {
+      dispatch({ type: 'patch', payload: { chat: [] } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        clearChatInCloud(state.user.id).catch(() => {});
+      }
+    },
+    bumpStat: (k, by = 1) => {
+      const nextStats = { ...state.stats, [k]: state.stats[k] + by };
+      dispatch({ type: 'patch', payload: { stats: nextStats } });
+      if (state.user?.id && state.user.id !== 'guest_user') {
+        saveUserStatsToCloud(nextStats, state.user.id).catch(() => {});
+      }
+    },
     weather,
     weatherLoading,
     weatherError,
@@ -946,12 +1708,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     weatherByPlace,
     loadPlaceWeather,
     resetAll: () => {
+      const userId = state.user?.id || 'guest_user';
+      removeLocalCache(getUserStorageKey(userId)).catch(() => {});
       if (typeof window !== 'undefined') {
-        localStorage.removeItem(KEY);
+        localStorage.removeItem(LEGACY_KEY);
       }
       dispatch({ type: 'hydrate', payload: defaultState() });
+      setSyncStatus('idle');
+      setLastSyncedAt(null);
     },
-  }), [ready, state, theme, scheme, fontScale, weather, weatherLoading, weatherError, calendarLoading, tasksLoading, refreshWeather, activePlace, weatherByPlace, loadPlaceWeather]);
+  }), [
+    ready,
+    state,
+    theme,
+    scheme,
+    fontScale,
+    syncStatus,
+    lastSyncedAt,
+    syncWithCloud,
+    weather,
+    weatherLoading,
+    weatherError,
+    calendarLoading,
+    tasksLoading,
+    refreshWeather,
+    activePlace,
+    weatherByPlace,
+    loadPlaceWeather,
+  ]);
 
   return <AppCtx.Provider value={api}>{children}</AppCtx.Provider>;
 }

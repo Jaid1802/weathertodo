@@ -1,27 +1,56 @@
-import React, { useEffect, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { ScrollView, View, AppState, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Btn, Card, IconBtn, ListGroup, Row, Toggle, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
 import { Radius, Space } from '../lib/theme';
 import { minutesToLabel } from '../lib/utils';
-import { getNotificationPermissionAsync, requestNotificationPermission, sendTestNotification } from '../lib/notifications';
+import { getNotificationPermissionDetails, requestNotificationPermission, sendTestNotification } from '../lib/notifications';
 
 export default function NotificationsScreen({ navigation }: any) {
   const app = useApp();
-  const { state, theme } = app;
+  const { state, theme, scheme } = app;
+  const isFocused = useIsFocused();
   const n = state.settings.notifications;
   const [permission, setPermission] = useState<'granted' | 'denied' | 'default' | 'unsupported'>('granted');
+  const [canAskAgain, setCanAskAgain] = useState(true);
 
-  useEffect(() => {
-    getNotificationPermissionAsync().then((p) => setPermission(p));
+  const checkPermission = useCallback(async () => {
+    const details = await getNotificationPermissionDetails();
+    setPermission(details.status);
+    setCanAskAgain(details.canAskAgain);
   }, []);
 
+  useEffect(() => {
+    checkPermission();
+
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        checkPermission();
+      }
+    });
+
+    return () => {
+      sub.remove();
+    };
+  }, [checkPermission]);
+
   const handleEnablePermissions = async () => {
-    const granted = await requestNotificationPermission();
-    const updated = await getNotificationPermissionAsync();
-    setPermission(updated);
+    await requestNotificationPermission();
+    await checkPermission();
+  };
+
+  const handleOpenSettings = async () => {
+    if (Platform.OS !== 'web') {
+      try {
+        await Linking.openSettings();
+      } catch (e) {
+        console.warn('Could not open settings', e);
+      }
+    }
   };
 
   const handleTestNotification = async () => {
@@ -30,6 +59,7 @@ export default function NotificationsScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
+      {isFocused && <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />}
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
         <IconBtn icon="chevron-back" onPress={() => navigation.goBack()} label="Back" />
         <Txt v="headline" w="700" style={{ flex: 1 }}>Notifications</Txt>
@@ -65,12 +95,20 @@ export default function NotificationsScreen({ navigation }: any) {
               </View>
               <View style={{ flex: 1 }}>
                 <Txt v="callout" w="700">Notifications Disabled</Txt>
-                <Txt v="sub" c={theme.textSecondary} style={{ marginTop: 2, marginBottom: permission === 'denied' ? 0 : 12 }}>
+                <Txt v="sub" c={theme.textSecondary} style={{ marginTop: 2, marginBottom: 12 }}>
                   {permission === 'denied'
-                    ? 'Device notifications are blocked. Please allow notifications in system/browser site settings to receive reminders.'
+                    ? 'Device notifications are blocked in Android system settings. Please open settings to allow notifications and receive reminders.'
                     : 'Enable notifications to receive task and event reminders.'}
                 </Txt>
-                {permission !== 'denied' && (
+                {permission === 'denied' || !canAskAgain ? (
+                  <Btn
+                    title="Open System Settings"
+                    icon="settings-outline"
+                    kind="secondary"
+                    small
+                    onPress={handleOpenSettings}
+                  />
+                ) : (
                   <Btn
                     title="Enable Notifications"
                     icon="notifications-outline"

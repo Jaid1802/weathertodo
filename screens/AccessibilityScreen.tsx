@@ -1,6 +1,7 @@
 import React from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Card, IconBtn, ListGroup, Row, Toggle, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
@@ -8,11 +9,12 @@ import { Space } from '../lib/theme';
 
 export default function AccessibilityScreen({ navigation }: any) {
   const app = useApp();
-  const { state, theme } = app;
+  const { state, theme, scheme } = app;
   const s = state.settings;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
         <IconBtn icon="chevron-back" onPress={() => navigation.goBack()} label="Back" />
         <Txt v="headline" w="700" style={{ flex: 1 }}>Accessibility</Txt>

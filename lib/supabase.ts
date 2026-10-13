@@ -105,7 +105,7 @@ export function getSupabaseClient(): SupabaseClient | null {
         storage: authStorage as any,
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: Platform.OS === 'web',
+        detectSessionInUrl: false,
         flowType: 'pkce',
       },
     });
@@ -124,6 +124,7 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
   success: boolean;
   cancelled?: boolean;
   error?: string;
+  session?: Session | null;
 }> {
   const client = getSupabaseClient();
   if (!client) {
@@ -181,16 +182,38 @@ export async function signInWithSupabaseGoogle(redirectOverride?: string): Promi
       const res = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
 
       if (res.type === 'success' && res.url) {
-        const parsed = new URL(res.url);
-        const code = parsed.searchParams.get('code');
+        let code: string | null = null;
+        try {
+          const parsed = new URL(res.url);
+          code = parsed.searchParams.get('code');
+        } catch {}
+        if (!code) {
+          const match = res.url.match(/[?&#]code=([^&#]+)/);
+          if (match) {
+            code = decodeURIComponent(match[1]);
+          }
+        }
+
         if (code) {
-          const { error: exchangeErr } = await client.auth.exchangeCodeForSession(code);
+          const { data: exchData, error: exchangeErr } = await client.auth.exchangeCodeForSession(code);
           if (exchangeErr) {
             console.error('[Supabase Code Exchange Error]:', exchangeErr);
             return { success: false, error: exchangeErr.message || 'Google sign-in was not completed.' };
           }
-          return { success: true };
+          return { success: true, session: exchData?.session };
         }
+
+        // Support direct token fragment if returned
+        const accessTokenMatch = res.url.match(/[?&#]access_token=([^&#]+)/);
+        const refreshTokenMatch = res.url.match(/[?&#]refresh_token=([^&#]+)/);
+        if (accessTokenMatch && refreshTokenMatch) {
+          const { data: sessData } = await client.auth.setSession({
+            access_token: decodeURIComponent(accessTokenMatch[1]),
+            refresh_token: decodeURIComponent(refreshTokenMatch[1]),
+          });
+          return { success: true, session: sessData?.session };
+        }
+
         return { success: true };
       } else if (res.type === 'cancel' || res.type === 'dismiss') {
         return { success: false, cancelled: true };
@@ -212,8 +235,12 @@ export async function exchangeSupabaseCode(code: string): Promise<{ session: Ses
   if (!client) {
     return { session: null, error: new Error('Supabase client not initialized') };
   }
+  const { data: existing } = await client.auth.getSession();
+  if (existing?.session) {
+    return { session: existing.session, error: null };
+  }
   const { data, error } = await client.auth.exchangeCodeForSession(code);
-  return { session: data.session, error };
+  return { session: data?.session ?? null, error };
 }
 
 /**

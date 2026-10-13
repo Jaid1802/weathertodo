@@ -14,6 +14,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useApp } from '../lib/store';
 import { PlanContext, Suggestion, CleverAction, askGemini, generateSuggestions, fetchSmartRecommendations } from '../lib/gemini';
@@ -223,8 +225,11 @@ export default function SmartSuggestionScreen({ navigation }: any) {
   const pillBg = isDark ? '#334155' : '#F1F5F9';
   const pillText = isDark ? '#F1F5F9' : '#1E293B';
 
+  const isFocused = useIsFocused();
+
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: bg }]} edges={['top']}>
+      {isFocused && <StatusBar style={isDark ? 'light' : 'dark'} />}
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

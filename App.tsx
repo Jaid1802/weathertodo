@@ -1,5 +1,5 @@
-import React from 'react';
-import { ActivityIndicator, Platform, View } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -8,7 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts } from 'expo-font';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -38,6 +38,107 @@ import SmartSuggestionScreen from './screens/SmartSuggestionScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
+
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  errorMessage: string | null;
+}
+
+class RootErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, errorMessage: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, errorMessage: error?.message || 'Unknown error' };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // Safely log error without printing secrets
+    console.error('[RootErrorBoundary] Caught unhandled rendering error:', error?.message);
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false, errorMessage: null });
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={errorStyles.container}>
+          <StatusBar style="light" />
+          <View style={errorStyles.card}>
+            <View style={errorStyles.iconContainer}>
+              <Ionicons name="alert-circle-outline" size={52} color="#EF4444" />
+            </View>
+            <Text style={errorStyles.title}>Application Error</Text>
+            <Text style={errorStyles.message}>
+              Something went wrong while starting the application.
+            </Text>
+            <TouchableOpacity style={errorStyles.button} onPress={this.handleRetry} activeOpacity={0.8}>
+              <Text style={errorStyles.buttonText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+const errorStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#0B1020',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  card: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 20,
+    padding: 28,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  iconContainer: {
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  message: {
+    fontSize: 15,
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  button: {
+    backgroundColor: '#3B82F6',
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
 
 function Tabs() {
   return (
@@ -71,8 +172,12 @@ function Root() {
 
   if (!ready) {
     return (
-      <View style={{ flex: 1, backgroundColor: theme.bg, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator size="large" color={theme.accent} />
+      <View style={{ flex: 1, backgroundColor: theme?.bg || '#0B1020', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+        <ActivityIndicator size="large" color={theme?.accent || '#3B82F6'} />
+        <Text style={{ marginTop: 16, color: theme?.textSecondary || '#94A3B8', fontSize: 14 }}>
+          Initializing application...
+        </Text>
       </View>
     );
   }
@@ -115,19 +220,36 @@ function Root() {
 }
 
 export default function App() {
-  const [fontsLoaded] = useFonts({ ...Ionicons.font });
+  const [fontsLoaded, fontError] = useFonts({ ...Ionicons.font });
+  const [fontTimedOut, setFontTimedOut] = useState(false);
 
-  if (!fontsLoaded) {
-    return <View style={{ flex: 1, backgroundColor: '#0B1020' }} />;
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setFontTimedOut(true);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const canRender = fontsLoaded || fontError || fontTimedOut;
+
+  if (!canRender) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0B1020', alignItems: 'center', justifyContent: 'center' }}>
+        <StatusBar style="light" />
+        <ActivityIndicator size="large" color="#3B82F6" />
+      </View>
+    );
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <AppProvider>
-          <Root />
-        </AppProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <RootErrorBoundary>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+          <AppProvider>
+            <Root />
+          </AppProvider>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    </RootErrorBoundary>
   );
 }

@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { FlatList, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Badge, Btn, Card, Chip, ConfirmDialog, EmptyState, IconBtn, Ring, Segmented, Sheet, Touch, Txt } from '../components/ui';
 import { useApp } from '../lib/store';
@@ -14,7 +16,7 @@ type Filter = 'today' | 'upcoming' | 'all' | 'done';
 
 export default function TasksScreen({ navigation }: any) {
   const app = useApp();
-  const { state, theme, weather } = app;
+  const { state, theme, weather, scheme } = app;
   const settings = state.settings;
   const [filter, setFilter] = useState<Filter>('today');
   const [listFilter, setListFilter] = useState<string>('all');
@@ -68,9 +70,11 @@ export default function TasksScreen({ navigation }: any) {
   const outdoorOpen = state.tasks.filter((t) => !t.done && t.context === 'outdoor');
 
   const flat = sections.flatMap((s) => [{ __section: s.title, id: `s_${s.title}` } as any, ...s.data]);
+  const isFocused = useIsFocused();
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
+      {isFocused && <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />}
       <View style={{ paddingHorizontal: Space.lg, paddingTop: Space.xs, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
         <View style={{ flex: 1 }}>
           <Txt v="title1" w="700">Tasks</Txt>

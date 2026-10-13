@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
@@ -30,7 +31,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 export default function IntegrationsScreen({ navigation }: any) {
   const app = useApp();
-  const { state, theme } = app;
+  const { state, theme, scheme } = app;
   const i = state.integrations;
   const [syncing, setSyncing] = useState<null | 'calendar' | 'tasks' | 'all'>(null);
   const [connecting, setConnecting] = useState(false);
@@ -193,6 +194,7 @@ export default function IntegrationsScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
         <IconBtn icon="chevron-back" onPress={() => navigation.goBack()} label="Back" />
         <Txt v="headline" w="700" style={{ flex: 1 }}>Integrations</Txt>
@@ -367,7 +369,6 @@ export default function IntegrationsScreen({ navigation }: any) {
 
         <ListGroup title="Data sources">
           <Row icon="partly-sunny-outline" title="Open-Meteo" subtitle="Forecast, hourly and daily data" value="Active" chevron={false} />
-          <Row icon="sparkles-outline" title="Gemini" subtitle={state.settings.geminiKey ? 'Live model connected' : 'On-device reasoning'} onPress={() => navigation.navigate('Settings')} />
           <Row icon="phone-portrait-outline" title="Device location" subtitle="Used only to resolve your current city" onPress={() => navigation.navigate('Locations')} last />
         </ListGroup>
       </ScrollView>

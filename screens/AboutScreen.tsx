@@ -1,6 +1,7 @@
 import React from 'react';
 import { Image, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Card, IconBtn, ListGroup, Row, Txt } from '../components/ui';
@@ -8,7 +9,7 @@ import { useApp } from '../lib/store';
 import { Radius, Space } from '../lib/theme';
 
 export default function AboutScreen({ navigation }: any) {
-  const { theme } = useApp();
+  const { theme, state, scheme } = useApp();
 
   const pillars = [
     { icon: 'partly-sunny', title: 'The weather', body: 'tells me what is happening outside.', color: '#0C8CE9' },
@@ -19,6 +20,7 @@ export default function AboutScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }} edges={['top']}>
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: Space.lg, paddingVertical: Space.sm, gap: 10 }}>
         <IconBtn icon="chevron-back" onPress={() => navigation.goBack()} label="Back" />
         <Txt v="headline" w="700" style={{ flex: 1 }}>About</Txt>

@@ -11,11 +11,25 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://lrlvdvzdciywlradhfqb.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxybHZkdnpkY2l5d2xyYWRoZnFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczMjQ2MTYsImV4cCI6MjEwMjkwMDYxNn0.FD--7GCZBwulX3Q8JO6GEZIunQubbyC3FS6EHeA716w",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "726201203948-9ibs5rdvqu4du53jup0m43sag31sov46.apps.googleusercontent.com",
+        "EXPO_PUBLIC_BACKEND_URL": "https://weatherwhattodo-backend.onrender.com",
+        "EXPO_PUBLIC_SITE_URL": "https://weatherwhattodo.netlify.app"
       }
     },
     "production": {
       "android": {
         "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://lrlvdvzdciywlradhfqb.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxybHZkdnpkY2l5d2xyYWRoZnFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczMjQ2MTYsImV4cCI6MjEwMjkwMDYxNn0.FD--7GCZBwulX3Q8JO6GEZIunQubbyC3FS6EHeA716w",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "726201203948-9ibs5rdvqu4du53jup0m43sag31sov46.apps.googleusercontent.com",
+        "EXPO_PUBLIC_BACKEND_URL": "https://weatherwhattodo-backend.onrender.com",
+        "EXPO_PUBLIC_SITE_URL": "https://weatherwhattodo.netlify.app"
       }
     }
   },
