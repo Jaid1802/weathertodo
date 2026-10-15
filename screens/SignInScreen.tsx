@@ -17,7 +17,7 @@ import {
 // Complete auth session if returning from web browser
 WebBrowser.maybeCompleteAuthSession();
 
-export default function SignInScreen() {
+export default function SignInScreen({ navigation }: any) {
   const app = useApp();
   const [mode, setMode] = useState<'in' | 'up'>('in');
   const [email, setEmail] = useState('');
@@ -117,6 +117,7 @@ export default function SignInScreen() {
         }
         if (data?.user) {
           app.signIn(data.user.email || email, name.trim(), 'email', data.user.id);
+          if (navigation?.canGoBack?.()) navigation.goBack();
         }
       } else {
         const { data, error: supaErr } = await signInWithEmailPassword(
@@ -134,6 +135,7 @@ export default function SignInScreen() {
             data.user.user_metadata?.full_name ||
             email.split('@')[0];
           app.signIn(data.user.email || email, userName, 'email', data.user.id);
+          if (navigation?.canGoBack?.()) navigation.goBack();
         }
       }
     } catch (err: any) {
@@ -150,7 +152,6 @@ export default function SignInScreen() {
     setGoogleBusy(true);
 
     try {
-      // Initiate Google OAuth directly via Supabase client
       const res = await signInWithSupabaseGoogle();
       if (res.cancelled) {
         setError('Google login cancelled.');
@@ -160,9 +161,10 @@ export default function SignInScreen() {
         setGoogleBusy(false);
       } else if (res.session?.user) {
         const u = res.session.user;
-        const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
+        const uName = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User';
         const avatar = u.user_metadata?.avatar_url || u.user_metadata?.picture;
-        app.signIn(u.email || '', name, 'google', u.id, avatar);
+        app.signIn(u.email || '', uName, 'google', u.id, avatar);
+        if (navigation?.canGoBack?.()) navigation.goBack();
       }
       // If web OAuth redirect was triggered, browser leaves page
     } catch (err: any) {
@@ -172,11 +174,29 @@ export default function SignInScreen() {
     }
   };
 
+  const handleContinueAsGuest = () => {
+    app.signIn('guest@weatherwhattodo.app', 'Guest', 'guest');
+    if (navigation?.canGoBack?.()) navigation.goBack();
+  };
+
+  const handleContinueSignedOut = () => {
+    app.continueAsSignedOut();
+    if (navigation?.canGoBack?.()) navigation.goBack();
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: sky.sky[1] }}>
       <StatusBar style="light" />
       <WeatherBackground sky={sky} dayProgress={0.5} reduceMotion={app.state.settings.reduceMotion} />
       <SafeAreaView style={{ flex: 1 }}>
+        {navigation?.canGoBack?.() && (
+          <View style={{ paddingHorizontal: Space.lg, paddingTop: Space.xs }}>
+            <Touch onPress={() => navigation.goBack()} scale={0.94} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Ionicons name="close" size={24} color={onSky} />
+              <Txt v="sub" w="600" c={onSky}>Close</Txt>
+            </Touch>
+          </View>
+        )}
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: Space.lg }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={{ alignItems: 'center', marginBottom: Space.xl }}>
@@ -287,12 +307,22 @@ export default function SignInScreen() {
                 kind="glass"
                 tint="transparent"
                 onTint={onSkyMuted}
-                onPress={() => app.signIn('guest@weatherwhattodo.app', 'Guest', 'guest')}
+                onPress={handleContinueAsGuest}
+              />
+              <View style={{ height: 6 }} />
+              <Btn
+                title="Explore without an account"
+                full
+                disabled={googleBusy || busy}
+                kind="glass"
+                tint="transparent"
+                onTint={onSkyMuted}
+                onPress={handleContinueSignedOut}
               />
             </GlassCard>
 
             <Txt v="micro" c={onSkyMuted} center style={{ marginTop: Space.lg, lineHeight: 17, maxWidth: 320, alignSelf: 'center' }}>
-              Accounts are stored locally on this device. No data is uploaded.
+              Signing in with Google enables secure cloud sync across devices. Guest and signed-out data remain stored locally on this device.
             </Txt>
           </ScrollView>
         </KeyboardAvoidingView>

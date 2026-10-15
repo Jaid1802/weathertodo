@@ -24,17 +24,20 @@ export default function ProfileScreen({ navigation }: any) {
   const isDark = scheme === 'dark';
 
   const user = state.user;
-  const isGuest = !user || user.provider === 'guest';
+  const isGuest = user?.provider === 'guest';
+  const isSignedOut = !user;
+  const isSignedIn = Boolean(user && !isGuest);
+
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(isGuest ? 'Guest' : (user?.name ?? ''));
   const [headline, setHeadline] = useState(user?.headline ?? 'Planning smarter every day');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
-  // Display values (Strictly enforce 'Guest' for guest login)
-  const displayName = isGuest ? 'Guest' : (user?.name?.trim() || 'User');
-  const displayEmail = isGuest ? 'guest@weatherwhattodo.app' : (user?.email || '');
-  const displayHeadline = user?.headline || 'Planning smarter every day';
-  const userInitials = isGuest ? 'G' : initials(displayName) || 'U';
+  // Display values
+  const displayName = isGuest ? 'Guest' : isSignedOut ? 'Not signed in' : (user?.name?.trim() || 'User');
+  const displayEmail = isGuest ? 'guest@weatherwhattodo.app' : isSignedOut ? 'Sign in to sync tasks & settings' : (user?.email || '');
+  const displayHeadline = isSignedOut ? 'Weather, calendar & tasks' : (user?.headline || 'Planning smarter every day');
+  const userInitials = isGuest ? 'G' : isSignedOut ? '?' : initials(displayName) || 'U';
 
   const bg = isDark ? '#0B1120' : '#F8FAFC';
   const cardBg = isDark ? '#1E293B' : '#FFFFFF';
@@ -114,7 +117,7 @@ export default function ProfileScreen({ navigation }: any) {
             <Text numberOfLines={1} style={[styles.userDescription, { color: textMuted }]}>
               {displayHeadline}
             </Text>
-            {!isGuest && (
+            {isSignedIn && (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
                 {app.syncStatus === 'syncing' ? (
                   <>
@@ -139,6 +142,10 @@ export default function ProfileScreen({ navigation }: any) {
           {/* Small Profile/User Icon on Right (touchable to edit profile) */}
           <Touch
             onPress={() => {
+              if (isSignedOut) {
+                navigation.navigate('SignIn');
+                return;
+              }
               setName(displayName);
               setHeadline(displayHeadline);
               setEditing(true);
@@ -147,7 +154,7 @@ export default function ProfileScreen({ navigation }: any) {
             hitSlop={10}
             style={styles.profileAction}
           >
-            <Ionicons name="person-outline" size={20} color={iconColor} />
+            <Ionicons name={isSignedOut ? 'log-in-outline' : 'person-outline'} size={20} color={iconColor} />
           </Touch>
         </View>
 
@@ -179,23 +186,40 @@ export default function ProfileScreen({ navigation }: any) {
           ))}
         </View>
 
-        {/* ---------------- Sign Out Button ---------------- */}
-        <Pressable
-          onPress={() => app.signOut()}
-          style={({ pressed }) => [
-            styles.signOutBtn,
-            {
-              backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : '#FFF1F2',
-              borderColor: isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECDD3',
-            },
-            pressed && { opacity: 0.8 },
-          ]}
-        >
-          <Ionicons name="log-out-outline" size={19} color="#EF4444" />
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </Pressable>
+        {/* ---------------- Action Button: Sign In (if signed out) or Sign Out ---------------- */}
+        {isSignedOut ? (
+          <Pressable
+            onPress={() => navigation.navigate('SignIn')}
+            style={({ pressed }) => [
+              styles.signOutBtn,
+              {
+                backgroundColor: isDark ? 'rgba(59, 130, 246, 0.1)' : '#EFF6FF',
+                borderColor: isDark ? 'rgba(59, 130, 246, 0.35)' : '#BFDBFE',
+              },
+              pressed && { opacity: 0.8 },
+            ]}
+          >
+            <Ionicons name="log-in-outline" size={19} color="#3B82F6" />
+            <Text style={[styles.signOutText, { color: '#3B82F6' }]}>Sign In / Create Account</Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            onPress={() => app.signOut()}
+            style={({ pressed }) => [
+              styles.signOutBtn,
+              {
+                backgroundColor: isDark ? 'rgba(239, 68, 68, 0.08)' : '#FFF1F2',
+                borderColor: isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECDD3',
+              },
+              pressed && { opacity: 0.8 },
+            ]}
+          >
+            <Ionicons name="log-out-outline" size={19} color="#EF4444" />
+            <Text style={styles.signOutText}>{isGuest ? 'Sign Out of Guest' : 'Sign Out'}</Text>
+          </Pressable>
+        )}
 
-        {!isGuest && (
+        {isSignedIn && (
           <Pressable
             onPress={() => setDeleteConfirm(true)}
             style={({ pressed }) => [

@@ -104,9 +104,9 @@ export default function HomeScreen({ navigation }: any) {
       tasks: todayTasks,
       allTasks: state.tasks,
       reminders: state.reminders,
-      integrations: state.user?.provider === 'guest' ? { googleCalendar: false, googleTasks: false } : state.integrations,
+      integrations: (!state.user || state.user.provider === 'guest') ? { googleCalendar: false, googleTasks: false } : state.integrations,
       settings,
-      userName: (state.user?.provider === 'guest' || !state.user) ? 'Guest' : (state.user?.name || 'User'),
+      userName: state.user?.provider === 'guest' ? 'Guest' : !state.user ? 'Friend' : (state.user?.name || 'User'),
       now: new Date(),
     };
   }, [weather, activePlace, todayEvents, state.events, todayTasks, state.tasks, state.reminders, state.integrations, settings, state.user]);
@@ -165,9 +165,12 @@ export default function HomeScreen({ navigation }: any) {
     return `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
   }, []);
 
-  const isGuest = !state.user || state.user.provider === 'guest';
+  const isGuest = state.user?.provider === 'guest';
+  const isSignedOut = !state.user;
   const userName = isGuest
     ? 'Guest'
+    : isSignedOut
+    ? 'Friend'
     : (state.user?.name?.trim() ? state.user.name.split(' ')[0] : 'User');
 
   // Find hourly weather for scheduled events

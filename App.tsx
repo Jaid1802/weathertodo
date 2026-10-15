@@ -194,11 +194,12 @@ function Root() {
       >
         {!state.onboarded ? (
           <Stack.Screen name="Onboarding" component={OnboardingScreen} />
-        ) : !state.user ? (
+        ) : !state.hasSeenWelcome && !state.user ? (
           <Stack.Screen name="SignIn" component={SignInScreen} options={{ animation: 'fade' }} />
         ) : (
           <>
             <Stack.Screen name="Main" component={Tabs} />
+            <Stack.Screen name="SignIn" component={SignInScreen} options={{ animation: 'fade' }} />
             <Stack.Screen name="WeatherDetail" component={WeatherDetailScreen} />
             <Stack.Screen name="TaskEditor" component={TaskEditorScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
             <Stack.Screen name="EventEditor" component={EventEditorScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />

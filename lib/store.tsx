@@ -83,6 +83,9 @@ import {
   mapPlaceRow,
   mapChatRow,
   mapSettingsRow,
+  getLastAuthMode,
+  setLastAuthMode,
+  migrateGuestTasksToUser as migrateGuestTasksService,
 } from './syncService';
 
 const LEGACY_KEY = '@weatherwhattodo/v1';
@@ -103,6 +106,7 @@ interface PersistShape {
   integrations: IntegrationState;
   chat: ChatMessage[];
   onboarded: boolean;
+  hasSeenWelcome: boolean;
   stats: { streak: number; lastActive: string; completedTotal: number; plansMade: number };
 }
 
@@ -131,7 +135,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoSuggest: true,
 };
 
-function defaultState(): PersistShape {
+function defaultState(onboarded = false, hasSeenWelcome = false): PersistShape {
   return {
     user: null,
     settings: DEFAULT_SETTINGS,
@@ -148,7 +152,8 @@ function defaultState(): PersistShape {
       account: undefined,
     },
     chat: [],
-    onboarded: false,
+    onboarded,
+    hasSeenWelcome,
     stats: { streak: 0, lastActive: dateKey(new Date()), completedTotal: 0, plansMade: 0 },
   };
 }
@@ -330,6 +335,8 @@ export interface Ctx {
   signOut: () => Promise<void>;
   updateProfile: (p: Partial<UserProfile>) => void;
   setOnboarded: (v: boolean) => void;
+  continueAsSignedOut: () => void;
+  migrateGuestTasksToUser: (targetUserId: string) => Promise<{ success: boolean; count: number; migratedTasks: Task[] }>;
   // settings
   setSettings: (p: Partial<Settings>) => void;
   updateSettings: (p: Partial<Settings>) => void;
@@ -399,7 +406,7 @@ export interface Ctx {
 const AppCtx = createContext<Ctx | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, undefined as unknown as PersistShape, defaultState);
+  const [state, dispatch] = useReducer(reducer, null, () => defaultState(false, false));
   const [ready, setReady] = useState(false);
   const [systemDark, setSystemDark] = useState(true);
   const [weather, setWeather] = useState<WeatherBundle | null>(null);
@@ -655,13 +662,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 provider: (u.app_metadata?.provider === 'google' ? 'google' : 'email'),
                 headline: 'Planning smarter every day',
               };
+              await setLastAuthMode(u.app_metadata?.provider === 'google' ? 'google' : 'email');
             }
           } catch (e) {
             console.warn('[Supabase] Session check error:', e);
           }
         }
 
-        // 3. Load user-partitioned local cache with strict 2.5s timeout
+        // 3. If no active Supabase session, check previous auth mode preference
+        if (!activeUserId) {
+          const lastMode = await getLastAuthMode();
+          if (lastMode === 'guest') {
+            activeUserId = 'guest_user';
+            activeUserObj = {
+              id: 'guest_user',
+              name: 'Guest',
+              email: 'guest@weatherwhattodo.app',
+              avatarColor: '#64748B',
+              createdAt: Date.now(),
+              provider: 'guest',
+              headline: 'Planning smarter every day',
+            };
+          }
+          // Note: if lastMode is 'signed_out', 'google' (expired), or null (fresh install),
+          // activeUserId stays null so the user is unauthenticated / signed-out.
+        }
+
+        // 4. Load user-partitioned local cache with strict 2.5s timeout
         const cacheKey = getUserStorageKey(activeUserId);
         const cachePromise = readLocalCache(cacheKey);
         const cacheTimeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500));
@@ -682,7 +709,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (parsed) {
           initialPersist = {
-            ...defaultState(),
+            ...defaultState(Boolean(parsed.onboarded), Boolean(parsed.hasSeenWelcome)),
             ...parsed,
             settings: {
               ...DEFAULT_SETTINGS,
@@ -698,6 +725,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             ...activeUserObj,
           };
           initialPersist.onboarded = true;
+          initialPersist.hasSeenWelcome = true;
         }
 
         // If places are empty, check if we have a saved last-known device place
@@ -857,15 +885,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Sync scheduled notifications with current user's tasks and events
   useEffect(() => {
     if (!ready) return;
-    const userId = state.user?.id || 'guest_user';
+    const userId = state.user?.id || 'signed_out_user';
     syncAllNotifications(state.tasks, state.events, userId, state.settings);
   }, [ready, state.user?.id, state.tasks, state.events, state.settings.notifications]);
 
   // Persist state to partitioned local storage
   useEffect(() => {
     if (!hydrated.current) return;
-    const userId = state.user?.id || 'guest_user';
-    const storageKey = getUserStorageKey(userId);
+    const storageKey = getUserStorageKey(state.user?.id);
     const id = setTimeout(() => {
       writeLocalCache(storageKey, state).catch(() => {});
     }, 250);
@@ -1066,6 +1093,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     signIn: (email, name, provider = 'email', customId?: string, avatarUrl?: string) => {
       // 1. Explicit handling for Guest session
       if (provider === 'guest') {
+        setLastAuthMode('guest').catch(() => {});
         dispatch({
           type: 'patch',
           payload: {
@@ -1087,6 +1115,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               lastSyncTasks: undefined,
             },
             onboarded: true,
+            hasSeenWelcome: true,
           },
         });
         setSyncStatus('idle');
@@ -1094,6 +1123,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       // 2. Handling for Authenticated users (Google or Email/Password)
+      setLastAuthMode(provider === 'google' ? 'google' : 'email').catch(() => {});
       const colors = ['#3B5BFF', '#7B5BFF', '#0FA968', '#E8890C', '#E5484D', '#0C8CE9'];
       const rawName = name || email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
       const nm = (rawName.trim() === 'Guest' || rawName.trim() === 'Guest User') ? (email.split('@')[0] || 'User') : rawName;
@@ -1120,6 +1150,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         payload: {
           user: userProfile,
           onboarded: true,
+          hasSeenWelcome: true,
         },
       });
 
@@ -1138,6 +1169,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }).catch(() => {});
       }
     },
+    continueAsSignedOut: () => {
+      setLastAuthMode('signed_out').catch(() => {});
+      dispatch({
+        type: 'patch',
+        payload: {
+          user: null,
+          onboarded: true,
+          hasSeenWelcome: true,
+        },
+      });
+    },
+    migrateGuestTasksToUser: async (targetUserId: string) => {
+      const nonGoogleTasks = state.tasks.filter((t) => t.source !== 'google');
+      const res = await migrateGuestTasksService(targetUserId, nonGoogleTasks);
+      if (res.success && res.migratedTasks.length > 0) {
+        dispatch({
+          type: 'patch',
+          payload: {
+            tasks: [...res.migratedTasks, ...state.tasks.filter((t) => t.source === 'google')],
+          },
+        });
+      }
+      return res;
+    },
     signOut: async () => {
       const currentUserId = state.user?.id || 'guest_user';
       clearUserNotifications(currentUserId);
@@ -1149,15 +1204,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         await clearStoredGoogleTokens();
       } catch {}
-      dispatch({ type: 'hydrate', payload: defaultState() });
+      await setLastAuthMode('signed_out');
+      const signedOutCache = await readLocalCache(getUserStorageKey(null));
+      const nextSignedOutState: PersistShape = signedOutCache
+        ? {
+            ...defaultState(true, true),
+            ...signedOutCache,
+            user: null,
+            onboarded: true,
+            hasSeenWelcome: true,
+            places: state.places.length > 0 ? state.places : signedOutCache.places || [],
+            activePlaceId: state.activePlaceId || 'current',
+            integrations: {
+              googleCalendar: false,
+              googleTasks: false,
+              account: undefined,
+            },
+          }
+        : {
+            ...defaultState(true, true),
+            places: state.places,
+            activePlaceId: state.activePlaceId,
+          };
+      dispatch({ type: 'hydrate', payload: nextSignedOutState });
       setSyncStatus('idle');
       setLastSyncedAt(null);
     },
     deleteAccount: async () => {
       const currentUserId = state.user?.id;
       if (!currentUserId || currentUserId === 'guest_user') {
-        clearUserNotifications('guest_user');
-        dispatch({ type: 'hydrate', payload: defaultState() });
+        clearUserNotifications(currentUserId || 'guest_user');
+        await setLastAuthMode('signed_out');
+        dispatch({ type: 'hydrate', payload: defaultState(true, true) });
         setSyncStatus('idle');
         return;
       }
@@ -1175,7 +1253,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         await clearStoredGoogleTokens();
       } catch {}
       await removeLocalCache(getUserStorageKey(currentUserId));
-      dispatch({ type: 'hydrate', payload: defaultState() });
+      await setLastAuthMode('signed_out');
+      dispatch({ type: 'hydrate', payload: defaultState(true, true) });
       setSyncStatus('idle');
       setLastSyncedAt(null);
     },

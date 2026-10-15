@@ -73,10 +73,6 @@ export default function OnboardingScreen({ navigation }: any) {
 
   const handleFinishOnboarding = async () => {
     try {
-      // If user hasn't signed in yet, initialize clean guest profile to enter dashboard directly
-      if (!app.state.user) {
-        app.signIn('guest@weatherwhattodo.app', 'Guest', 'guest');
-      }
       app.setOnboarded(true);
     } catch (e) {
       console.warn('[Onboarding] Error completing onboarding:', e);

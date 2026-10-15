@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getSupabaseClient } from './supabase';
+import { getSupabaseClient, isSupabaseConfigured } from './supabase';
 import {
   CalEvent,
   CalendarInfo,
@@ -28,10 +28,14 @@ export interface PendingSyncMutation {
   timestamp: number;
 }
 
+const SIGNED_OUT_STORAGE_KEY = '@weatherwhattodo/signed_out_cache_v2';
 const GUEST_STORAGE_KEY = '@weatherwhattodo/guest_cache_v2';
 const USER_STORAGE_PREFIX = '@weatherwhattodo/cache_v2_';
 const DELETED_TASKS_PREFIX = '@weatherwhattodo/deleted_tasks_';
 const PENDING_QUEUE_PREFIX = '@weatherwhattodo/pending_queue_';
+export const LAST_AUTH_MODE_KEY = '@weatherwhattodo/last_auth_mode';
+
+export type AuthMode = 'google' | 'email' | 'guest' | 'signed_out';
 
 /**
  * Validates that an ID is a valid canonical RFC-4122 UUID.
@@ -43,10 +47,35 @@ export function isValidUuid(id?: string | null): boolean {
 }
 
 export function getUserStorageKey(userId?: string | null): string {
-  if (!userId || userId === 'guest_user') {
+  if (!userId) {
+    return SIGNED_OUT_STORAGE_KEY;
+  }
+  if (userId === 'guest_user') {
     return GUEST_STORAGE_KEY;
   }
   return `${USER_STORAGE_PREFIX}${userId}`;
+}
+
+export async function getLastAuthMode(): Promise<AuthMode | null> {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+      return (window.localStorage.getItem(LAST_AUTH_MODE_KEY) as AuthMode) || null;
+    }
+    const val = await AsyncStorage.getItem(LAST_AUTH_MODE_KEY);
+    return (val as AuthMode) || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setLastAuthMode(mode: AuthMode): Promise<void> {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(LAST_AUTH_MODE_KEY, mode);
+      return;
+    }
+    await AsyncStorage.setItem(LAST_AUTH_MODE_KEY, mode);
+  } catch {}
 }
 
 export async function readLocalCache(key: string): Promise<any | null> {
@@ -1147,4 +1176,54 @@ export function subscribeToRealtimeChanges(
   return () => {
     client.removeChannel(channel);
   };
+}
+
+/**
+ * Safely migrates guest tasks to a Google authenticated user.
+ * Preserves stable IDs, avoids duplicate uploads, and ensures tasks are associated with target user.
+ */
+export async function migrateGuestTasksToUser(
+  targetUserId: string,
+  guestTasks: Task[]
+): Promise<{ success: boolean; count: number; migratedTasks: Task[] }> {
+  if (!isValidUuid(targetUserId) || !isSupabaseConfigured() || !Array.isArray(guestTasks) || guestTasks.length === 0) {
+    return { success: true, count: 0, migratedTasks: [] };
+  }
+
+  try {
+    const remote = await fetchRemoteUserData(targetUserId);
+    const existingKeys = new Set(
+      (remote?.tasks || []).map((t) => `${t.title.trim().toLowerCase()}_${t.dueDate || ''}`)
+    );
+
+    const migratedTasks: Task[] = [];
+    let count = 0;
+
+    for (const gt of guestTasks) {
+      if (gt.source === 'google') continue;
+      const key = `${gt.title.trim().toLowerCase()}_${gt.dueDate || ''}`;
+      if (existingKeys.has(key)) {
+        continue; // duplicate prevention
+      }
+
+      const migratedTask: Task = {
+        ...gt,
+        source: 'local',
+      };
+
+      try {
+        await saveTaskToCloud(migratedTask, targetUserId);
+        existingKeys.add(key);
+        migratedTasks.push(migratedTask);
+        count++;
+      } catch (uploadErr) {
+        console.warn('[Sync] Failed uploading migrated guest task:', gt.id, uploadErr);
+      }
+    }
+
+    return { success: true, count, migratedTasks };
+  } catch (err) {
+    console.error('[Sync] Error migrating guest tasks to user:', err);
+    return { success: false, count: 0, migratedTasks: [] };
+  }
 }
